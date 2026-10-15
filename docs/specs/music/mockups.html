@@ -1,0 +1,464 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Music widget mockups</title>
+<!-- The real Gladys theme (Tabler fork), the version front/package.json pins -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@gladysassistant/theme-optimized@2.1.0/dashboard.css">
+<style>
+  /* Mockup-only layout: each .frame is rendered to one PNG of docs/specs/music/ */
+  body { background: #e9ecef; margin: 0; padding: 24px; font-size: 0.9375rem; }
+  .frame { background: #f5f7fb; padding: 24px; margin-bottom: 32px; box-sizing: border-box; }
+  .frame-title { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: #868e96; margin-bottom: 12px; font-weight: 600; }
+  .caption { font-size: 12px; color: #868e96; margin-top: 8px; text-align: center; }
+  .note { font-size: 12px; color: #6e7687; background: #fff8e1; border: 1px dashed #f1c40f; border-radius: 4px; padding: 6px 10px; margin-top: 10px; }
+
+  /* Album-art placeholders (gradients, no external image) */
+  .art { border-radius: 6px; background-size: cover; flex-shrink: 0; position: relative; }
+  .art-heroes { background-image: linear-gradient(135deg, #2c3e50 0%, #4b6584 45%, #d1d8e0 100%); }
+  .art-fip { background-image: linear-gradient(135deg, #e84393 0%, #fd79a8 100%); }
+  .art-jazz { background-image: linear-gradient(135deg, #0c2461 0%, #1e3799 60%, #f6b93b 100%); }
+  .art-lowa { background-image: linear-gradient(135deg, #e55039 0%, #fa983a 100%); }
+  .art-station { background-image: linear-gradient(135deg, #78e08f 0%, #079992 100%); }
+  .art-spotify { background-image: linear-gradient(135deg, #1db954 0%, #191414 100%); }
+  .art-scary { background-image: linear-gradient(135deg, #b71540 0%, #3c40c6 100%); }
+  .art .art-glyph { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: rgba(255,255,255,.75); }
+
+  /* Music box — full */
+  .music-art-lg { width: 100%; padding-top: 100%; border-radius: 8px; }
+  .music-art-wrap { max-width: 240px; margin: 0 auto 16px; }
+  .np-title { font-size: 1.125rem; font-weight: 600; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .np-sub { color: #6e7687; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .source-badge { font-weight: 500; }
+  .progress-times { display: flex; justify-content: space-between; font-size: 12px; color: #9aa0ac; margin-top: 4px; }
+  .transport { display: flex; align-items: center; justify-content: space-between; margin: 12px 0 8px; }
+  .btn-icon { width: 40px; height: 40px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; border: 0; background: transparent; color: #495057; font-size: 18px; padding: 0; }
+  .btn-icon.disabled { opacity: .3; }
+  .btn-icon.active { color: #467fcf; }
+  .btn-play { width: 56px; height: 56px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 22px; padding: 0; }
+  .volume-row { display: flex; align-items: center; gap: 10px; color: #6e7687; }
+  .volume-row input { flex: 1; }
+  .player-switch { font-size: 13px; padding: 2px 10px; }
+  .player-switch .fe { font-size: 13px; }
+
+  /* Music box — compact */
+  .compact-body { display: flex; align-items: center; gap: 12px; padding: 12px 16px; }
+  .compact-text { flex: 1; min-width: 0; }
+  .compact-title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .compact-sub { color: #6e7687; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .compact-progress { height: 3px; background: #e9ecef; }
+  .compact-progress > div { height: 3px; background: #467fcf; }
+  .live-badge { font-size: 10px; letter-spacing: .05em; }
+
+  /* Search modal */
+  .modal-static { position: static; display: block; }
+  .modal-static .modal-dialog { margin: 0 auto; }
+  .chips .btn { margin: 0 6px 6px 0; }
+  .result-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid #f0f2f5; }
+  .result-row:last-child { border-bottom: 0; }
+  .result-row .text { flex: 1; min-width: 0; }
+  .result-row .title { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .result-row .sub { color: #6e7687; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .result-row.dimmed { opacity: .45; }
+  .source-head { display: flex; align-items: center; justify-content: space-between; margin: 16px 0 4px; }
+  .source-head h5 { margin: 0; font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: #6e7687; }
+  .tile-grid { display: grid; grid-template-columns: repeat(4, 140px); gap: 12px; }
+  .tile .art { width: 100%; padding-top: 100%; }
+  .tile .title { font-weight: 500; font-size: 13px; margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tile .sub { color: #6e7687; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .modal-footer-play { display: flex; align-items: center; gap: 12px; justify-content: space-between; }
+
+  /* Player picker */
+  .room-head { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: #9aa0ac; margin: 12px 0 4px; font-weight: 600; }
+  .player-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 6px; border: 1px solid transparent; }
+  .player-row.selected { border-color: #467fcf; background: #f0f5fc; }
+  .player-row.disabled { opacity: .5; }
+  .player-row .icon { width: 36px; height: 36px; border-radius: 50%; background: #f0f2f5; display: flex; align-items: center; justify-content: center; color: #495057; }
+  .player-row .text { flex: 1; min-width: 0; }
+  .player-row .name { font-weight: 500; }
+  .player-row .status { font-size: 12px; color: #6e7687; }
+  .eq { display: inline-block; width: 10px; height: 10px; margin-right: 4px; background: linear-gradient(90deg, #5eba00 0 2px, transparent 2px 4px, #5eba00 4px 6px, transparent 6px 8px, #5eba00 8px 10px); vertical-align: -1px; }
+
+  /* Phones */
+  .phones { display: flex; gap: 28px; align-items: flex-start; }
+  .phone { width: 390px; height: 800px; border-radius: 36px; border: 10px solid #1f2328; background: #f5f7fb; overflow: hidden; position: relative; box-shadow: 0 10px 30px rgba(0,0,0,.15); }
+  .phone-status { height: 28px; font-size: 12px; font-weight: 600; display: flex; justify-content: space-between; padding: 6px 22px 0; color: #222; }
+  .phone-content { padding: 8px 12px; }
+  .sheet-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,.45); }
+  .sheet { position: absolute; left: 0; right: 0; bottom: 0; background: #fff; border-radius: 16px 16px 0 0; padding: 8px 16px 24px; }
+  .sheet-grip { width: 40px; height: 4px; border-radius: 2px; background: #dee2e6; margin: 4px auto 12px; }
+  .fullscreen-sheet { position: absolute; inset: 28px 0 0 0; background: #fff; padding: 12px 14px; }
+
+  /* Today's widget (copied markup from MusicBox.jsx) */
+  .legacy-label { position: absolute; top: -10px; right: 12px; }
+</style>
+</head>
+<body>
+
+<!-- ============================================================ -->
+<div class="frame" id="desktop-dashboard" style="width: 1240px;">
+  <div class="frame-title">Desktop dashboard — adapted Music widget</div>
+  <div class="row">
+    <!-- FULL player -->
+    <div class="col-lg-4">
+      <div class="card">
+        <div class="card-header">
+          <h3 class="card-title">Music</h3>
+          <div class="card-options">
+            <button class="btn btn-sm btn-outline-secondary player-switch"><i class="fe fe-speaker mr-1"></i>Living room · Sonos <i class="fe fe-chevron-down ml-1"></i></button>
+          </div>
+        </div>
+        <div class="card-body">
+          <div class="music-art-wrap"><div class="art music-art-lg art-heroes" style="background-image: linear-gradient(135deg, #2c3e50 0%, #4b6584 45%, #d1d8e0 100%);"></div></div>
+          <div class="d-flex align-items-start justify-content-between">
+            <div style="min-width:0;">
+              <div class="np-title">Beauty and the Beast</div>
+              <div class="np-sub">David Bowie · "Heroes"</div>
+            </div>
+            <span class="badge badge-secondary source-badge mt-1"><i class="fe fe-disc mr-1"></i>Navidrome</span>
+          </div>
+          <div class="mt-4">
+            <div class="progress progress-sm"><div class="progress-bar bg-blue" style="width: 38%"></div></div>
+            <div class="progress-times"><span>1:22</span><span>3 / 10</span><span>3:36</span></div>
+          </div>
+          <div class="transport">
+            <button class="btn-icon disabled" title="Shuffle (phase 3)"><i class="fe fe-shuffle"></i></button>
+            <button class="btn-icon"><i class="fe fe-skip-back"></i></button>
+            <button class="btn btn-primary btn-play"><i class="fe fe-pause"></i></button>
+            <button class="btn-icon"><i class="fe fe-skip-forward"></i></button>
+            <button class="btn-icon disabled" title="Repeat (phase 3)"><i class="fe fe-repeat"></i></button>
+          </div>
+          <div class="volume-row"><i class="fe fe-volume-1"></i><input type="range" class="custom-range" value="32" min="0" max="100"><span style="width:28px;text-align:right;font-size:13px;">32</span></div>
+        </div>
+        <div class="card-footer">
+          <button class="btn btn-block btn-outline-primary"><i class="fe fe-search mr-2"></i>Play something…</button>
+        </div>
+      </div>
+      <div class="caption">display: "full" (default) — player with <code>now-playing</code> + <code>play-media</code></div>
+    </div>
+
+    <!-- COMPACT players -->
+    <div class="col-lg-4">
+      <div class="card mb-3">
+        <div class="compact-body">
+          <div class="art art-fip" style="width:56px;height:56px;background-image: linear-gradient(135deg, #e84393 0%, #fd79a8 100%);"><div class="art-glyph"><i class="fe fe-radio"></i></div></div>
+          <div class="compact-text">
+            <div class="compact-title">FIP</div>
+            <div class="compact-sub"><span class="badge badge-danger live-badge mr-1">LIVE</span>Kitchen · Nest Mini</div>
+          </div>
+          <button class="btn-icon"><i class="fe fe-pause"></i></button>
+          <button class="btn-icon"><i class="fe fe-search"></i></button>
+        </div>
+      </div>
+      <div class="card mb-3">
+        <div class="compact-body">
+          <div class="art art-jazz" style="width:56px;height:56px;background-image: linear-gradient(135deg, #0c2461 0%, #1e3799 60%, #f6b93b 100%);"></div>
+          <div class="compact-text">
+            <div class="compact-title">So What</div>
+            <div class="compact-sub">Miles Davis · Office · WiiM</div>
+          </div>
+          <button class="btn-icon"><i class="fe fe-play"></i></button>
+          <button class="btn-icon"><i class="fe fe-skip-forward"></i></button>
+        </div>
+        <div class="compact-progress"><div style="width: 64%"></div></div>
+      </div>
+      <div class="card mb-3">
+        <div class="compact-body">
+          <div class="art" style="width:56px;height:56px;background:#f0f2f5;"><div class="art-glyph" style="color:#adb5bd;"><i class="fe fe-music"></i></div></div>
+          <div class="compact-text">
+            <div class="compact-title text-muted">Nothing playing</div>
+            <div class="compact-sub">Bedroom · Sonos One</div>
+          </div>
+          <button class="btn btn-sm btn-primary"><i class="fe fe-search mr-1"></i>Play</button>
+        </div>
+      </div>
+      <div class="caption">display: "compact" — playing radio (no duration), paused, idle (<code>STOPPED</code>)</div>
+    </div>
+
+    <!-- LEGACY + TODAY -->
+    <div class="col-lg-4">
+      <div class="card mb-3">
+        <div class="card-header"><h3 class="card-title">Garage amp</h3></div>
+        <div class="card-body">
+          <div class="row">
+            <div class="col"><button class="btn btn-block btn-secondary"><i class="fe fe-skip-back"></i></button></div>
+            <div class="col"><button class="btn btn-block btn-secondary"><i class="fe fe-play"></i></button></div>
+            <div class="col"><button class="btn btn-block btn-secondary"><i class="fe fe-skip-forward"></i></button></div>
+          </div>
+          <div class="row mt-4"><div class="col"><input type="range" value="40" class="form-control" min="0" max="100"></div></div>
+        </div>
+      </div>
+      <div class="caption">Legacy player (no <code>now-playing</code>, no <code>play-media</code>): rendered exactly as today — this is also today's widget for every player</div>
+      <div class="note mt-4"><b>Rendering rule:</b> each area appears only if the matching feature exists — artwork/title ← <code>now-playing</code>; buttons ← <code>play</code>/<code>pause</code>/<code>previous</code>/<code>next</code>; slider ← <code>volume</code>; "Play something…" and the speaker dropdown ← <code>play-media</code>. Shuffle/repeat are greyed placeholders for phase 3 and are <i>hidden</i> when the player does not declare them.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<div class="frame" id="search-desktop" style="width: 1000px;">
+  <div class="frame-title">Search — "what" (modal shared by the widget and the scene editor)</div>
+  <div class="modal-static">
+    <div class="modal-dialog modal-lg" style="max-width: 900px;">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title"><i class="fe fe-music mr-2"></i>Play music</h5>
+          <button class="close" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <div class="input-icon mb-3">
+            <span class="input-icon-addon"><i class="fe fe-search"></i></span>
+            <input class="form-control" value="heroes">
+          </div>
+          <div class="d-flex justify-content-between align-items-start">
+            <div class="chips">
+              <button class="btn btn-sm btn-pill btn-primary">All</button>
+              <button class="btn btn-sm btn-pill btn-secondary">Tracks</button>
+              <button class="btn btn-sm btn-pill btn-secondary">Albums</button>
+              <button class="btn btn-sm btn-pill btn-secondary">Artists</button>
+              <button class="btn btn-sm btn-pill btn-secondary">Playlists</button>
+              <button class="btn btn-sm btn-pill btn-secondary">Radios</button>
+            </div>
+            <select class="form-control custom-select" style="width: 180px;"><option>All sources (3)</option></select>
+          </div>
+
+          <div class="source-head"><h5><i class="fe fe-disc mr-1"></i>Navidrome</h5><a href="#" class="small">More results</a></div>
+          <div class="tile-grid mb-2">
+            <div class="tile"><div class="art art-heroes" style="background-image: linear-gradient(135deg, #2c3e50 0%, #4b6584 45%, #d1d8e0 100%);"></div><div class="title">"Heroes"</div><div class="sub">Album · David Bowie · 1977</div></div>
+            <div class="tile"><div class="art art-scary" style="background-image: linear-gradient(135deg, #b71540 0%, #3c40c6 100%);"></div><div class="title">Best of Bowie</div><div class="sub">Album · David Bowie · 2002</div></div>
+            <div class="tile"><div class="art art-lowa" style="background-image: linear-gradient(135deg, #e55039 0%, #fa983a 100%);"></div><div class="title">Heroes — live</div><div class="sub">Playlist · 14 tracks</div></div>
+            <div class="tile"><div class="art" style="background:#f0f2f5;"><div class="art-glyph" style="color:#adb5bd;"><i class="fe fe-user"></i></div></div><div class="title">David Bowie</div><div class="sub">Artist</div></div>
+          </div>
+          <div class="result-row">
+            <div class="art art-heroes" style="width:40px;height:40px;background-image: linear-gradient(135deg, #2c3e50 0%, #4b6584 45%, #d1d8e0 100%);"></div>
+            <div class="text"><div class="title">"Heroes"</div><div class="sub">Track · David Bowie — "Heroes"</div></div>
+            <span class="text-muted small mr-2">6:07</span>
+            <button class="btn btn-sm btn-primary"><i class="fe fe-play"></i></button>
+            <button class="btn btn-sm btn-secondary" title="Play next / Add to queue"><i class="fe fe-more-horizontal"></i></button>
+          </div>
+          <div class="result-row">
+            <div class="art art-jazz" style="width:40px;height:40px;background-image: linear-gradient(135deg, #0c2461 0%, #1e3799 60%, #f6b93b 100%);"></div>
+            <div class="text"><div class="title">Heroes and Villains</div><div class="sub">Track · The Beach Boys — Smiley Smile</div></div>
+            <span class="text-muted small mr-2">3:37</span>
+            <button class="btn btn-sm btn-primary"><i class="fe fe-play"></i></button>
+            <button class="btn btn-sm btn-secondary"><i class="fe fe-more-horizontal"></i></button>
+          </div>
+
+          <div class="source-head"><h5><i class="fe fe-radio mr-1"></i>Radios</h5></div>
+          <div class="result-row">
+            <div class="art art-station" style="width:40px;height:40px;background-image: linear-gradient(135deg, #78e08f 0%, #079992 100%);"><div class="art-glyph"><i class="fe fe-radio"></i></div></div>
+            <div class="text"><div class="title">Radio Heroes 80s</div><div class="sub">Radio · saved station</div></div>
+            <span class="badge badge-danger live-badge mr-2">LIVE</span>
+            <button class="btn btn-sm btn-primary"><i class="fe fe-play"></i></button>
+          </div>
+
+          <div class="source-head"><h5><i class="fe fe-headphones mr-1"></i>Spotify</h5><span class="small text-muted">Plays only on Spotify Connect devices</span></div>
+          <div class="result-row dimmed">
+            <div class="art art-spotify" style="width:40px;height:40px;background-image: linear-gradient(135deg, #1db954 0%, #191414 100%);"></div>
+            <div class="text"><div class="title">"Heroes" (2017 Remaster)</div><div class="sub">Track · David Bowie — not playable on Living room · Sonos</div></div>
+            <span class="text-muted small mr-2">6:11</span>
+            <button class="btn btn-sm btn-secondary" disabled><i class="fe fe-play"></i></button>
+          </div>
+          <div class="alert alert-warning py-2 mt-3 mb-0 small"><i class="fe fe-alert-triangle mr-1"></i>Plex did not answer in time — results from the other sources are shown.</div>
+        </div>
+        <div class="modal-footer modal-footer-play">
+          <div class="d-flex align-items-center">
+            <span class="text-muted mr-2">Play on</span>
+            <button class="btn btn-outline-secondary"><i class="fe fe-speaker mr-1"></i>Living room · Sonos <i class="fe fe-chevron-down ml-1"></i></button>
+          </div>
+          <div class="btn-group">
+            <button class="btn btn-secondary active">Replace</button>
+            <button class="btn btn-secondary">Play next</button>
+            <button class="btn btn-secondary">Add to queue</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<div class="frame" id="player-picker" style="width: 620px;">
+  <div class="frame-title">Speaker picker — "where" (GET /api/v1/music/player?uri=…)</div>
+  <div class="modal-static">
+    <div class="modal-dialog" style="max-width: 560px;">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">Play on…</h5>
+          <button class="close" aria-label="Close"></button>
+        </div>
+        <div class="modal-body pt-2">
+          <div class="d-flex align-items-center p-2 mb-2" style="background:#f5f7fb;border-radius:6px;">
+            <div class="art art-heroes mr-3" style="width:40px;height:40px;background-image: linear-gradient(135deg, #2c3e50 0%, #4b6584 45%, #d1d8e0 100%);"></div>
+            <div><div class="font-weight-bold">"Heroes"</div><div class="small text-muted">Album · David Bowie · Navidrome</div></div>
+          </div>
+          <div class="room-head">Living room</div>
+          <div class="player-row selected">
+            <div class="icon"><i class="fe fe-speaker"></i></div>
+            <div class="text"><div class="name">Sonos One</div><div class="status"><span class="eq"></span>Playing · Beauty and the Beast</div></div>
+            <i class="fe fe-check text-primary"></i>
+          </div>
+          <div class="player-row disabled">
+            <div class="icon"><i class="fe fe-headphones"></i></div>
+            <div class="text"><div class="name">Living room TV (Spotify Connect)</div><div class="status">Plays Spotify content only</div></div>
+          </div>
+          <div class="room-head">Kitchen</div>
+          <div class="player-row">
+            <div class="icon"><i class="fe fe-cast"></i></div>
+            <div class="text"><div class="name">Nest Mini</div><div class="status"><span class="eq"></span>Playing · FIP</div></div>
+          </div>
+          <div class="room-head">Office</div>
+          <div class="player-row">
+            <div class="icon"><i class="fe fe-speaker"></i></div>
+            <div class="text"><div class="name">WiiM Pro</div><div class="status">Paused · So What</div></div>
+          </div>
+          <div class="player-row disabled">
+            <div class="icon"><i class="fe fe-airplay"></i></div>
+            <div class="text"><div class="name">HomePod (AirPlay)</div><div class="status">Notifications only — can't play media yet</div></div>
+          </div>
+          <div class="room-head">Bedroom</div>
+          <div class="player-row">
+            <div class="icon"><i class="fe fe-speaker"></i></div>
+            <div class="text"><div class="name">Sonos One</div><div class="status">Idle</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<div class="frame" id="mobile" style="width: 1340px;">
+  <div class="frame-title">Mobile — dashboard, search, speaker sheet</div>
+  <div class="phones">
+    <!-- Phone 1: dashboard -->
+    <div>
+      <div class="phone">
+        <div class="phone-status"><span>18:42</span><span><i class="fe fe-wifi"></i></span></div>
+        <div class="phone-content">
+          <h4 class="mb-3 mt-1">Home</h4>
+          <div class="card mb-3">
+            <div class="compact-body">
+              <div class="art art-heroes" style="width:52px;height:52px;background-image: linear-gradient(135deg, #2c3e50 0%, #4b6584 45%, #d1d8e0 100%);"></div>
+              <div class="compact-text"><div class="compact-title">Beauty and the Beast</div><div class="compact-sub">David Bowie · Living room</div></div>
+              <button class="btn-icon"><i class="fe fe-pause"></i></button>
+              <button class="btn-icon"><i class="fe fe-skip-forward"></i></button>
+            </div>
+            <div class="compact-progress"><div style="width: 38%"></div></div>
+          </div>
+          <div class="card">
+            <div class="card-header"><h3 class="card-title">Kitchen</h3><div class="card-options"><button class="btn btn-sm btn-outline-secondary player-switch"><i class="fe fe-cast mr-1"></i>Nest Mini <i class="fe fe-chevron-down ml-1"></i></button></div></div>
+            <div class="card-body">
+              <div class="d-flex align-items-center">
+                <div class="art art-fip mr-3" style="width:96px;height:96px;background-image: linear-gradient(135deg, #e84393 0%, #fd79a8 100%);"><div class="art-glyph"><i class="fe fe-radio" style="font-size:28px;"></i></div></div>
+                <div style="min-width:0;"><div class="np-title">FIP</div><div class="np-sub">Radio France</div><span class="badge badge-danger live-badge mt-1">LIVE</span> <span class="badge badge-secondary"><i class="fe fe-radio mr-1"></i>Radios</span></div>
+              </div>
+              <div class="transport"><button class="btn-icon disabled"><i class="fe fe-skip-back"></i></button><button class="btn btn-primary btn-play"><i class="fe fe-pause"></i></button><button class="btn-icon disabled"><i class="fe fe-skip-forward"></i></button></div>
+              <div class="volume-row"><i class="fe fe-volume-1"></i><input type="range" class="custom-range" value="55"></div>
+            </div>
+            <div class="card-footer"><button class="btn btn-block btn-outline-primary"><i class="fe fe-search mr-2"></i>Play something…</button></div>
+          </div>
+        </div>
+      </div>
+      <div class="caption">Compact (top) and full widgets stacked</div>
+    </div>
+    <!-- Phone 2: search full screen -->
+    <div>
+      <div class="phone">
+        <div class="phone-status"><span>18:43</span><span><i class="fe fe-wifi"></i></span></div>
+        <div class="fullscreen-sheet">
+          <div class="d-flex align-items-center mb-2"><button class="btn-icon"><i class="fe fe-x"></i></button><h5 class="mb-0 ml-1">Play music</h5></div>
+          <div class="input-icon mb-2"><span class="input-icon-addon"><i class="fe fe-search"></i></span><input class="form-control" value="bowie"></div>
+          <div class="chips" style="white-space:nowrap;overflow:hidden;"><button class="btn btn-sm btn-pill btn-secondary">All</button><button class="btn btn-sm btn-pill btn-primary">Albums</button><button class="btn btn-sm btn-pill btn-secondary">Tracks</button><button class="btn btn-sm btn-pill btn-secondary">Artists</button><button class="btn btn-sm btn-pill btn-secondary">Radios</button></div>
+          <div class="source-head"><h5>Navidrome</h5></div>
+          <div class="result-row"><div class="art art-heroes" style="width:44px;height:44px;background-image: linear-gradient(135deg, #2c3e50 0%, #4b6584 45%, #d1d8e0 100%);"></div><div class="text"><div class="title">"Heroes"</div><div class="sub">David Bowie · 1977</div></div><button class="btn btn-sm btn-primary"><i class="fe fe-play"></i></button></div>
+          <div class="result-row"><div class="art art-scary" style="width:44px;height:44px;background-image: linear-gradient(135deg, #b71540 0%, #3c40c6 100%);"></div><div class="text"><div class="title">Scary Monsters</div><div class="sub">David Bowie · 1980</div></div><button class="btn btn-sm btn-primary"><i class="fe fe-play"></i></button></div>
+          <div class="result-row"><div class="art art-lowa" style="width:44px;height:44px;background-image: linear-gradient(135deg, #e55039 0%, #fa983a 100%);"></div><div class="text"><div class="title">Low</div><div class="sub">David Bowie · 1977</div></div><button class="btn btn-sm btn-primary"><i class="fe fe-play"></i></button></div>
+          <div class="text-center my-2"><a href="#" class="small">More from Navidrome</a></div>
+          <div class="source-head"><h5>Spotify</h5></div>
+          <div class="result-row dimmed"><div class="art art-spotify" style="width:44px;height:44px;background-image: linear-gradient(135deg, #1db954 0%, #191414 100%);"></div><div class="text"><div class="title">Hunky Dory</div><div class="sub">Only on Spotify Connect</div></div><button class="btn btn-sm btn-secondary" disabled><i class="fe fe-play"></i></button></div>
+          <div style="position:absolute;left:0;right:0;bottom:0;padding:12px 14px;border-top:1px solid #e9ecef;background:#fff;" class="d-flex align-items-center justify-content-between">
+            <span class="text-muted small">Play on</span>
+            <button class="btn btn-outline-secondary btn-sm"><i class="fe fe-speaker mr-1"></i>Living room · Sonos <i class="fe fe-chevron-down ml-1"></i></button>
+          </div>
+        </div>
+      </div>
+      <div class="caption">Search becomes a full-screen sheet</div>
+    </div>
+    <!-- Phone 3: speaker bottom sheet -->
+    <div>
+      <div class="phone">
+        <div class="phone-status"><span>18:43</span><span><i class="fe fe-wifi"></i></span></div>
+        <div class="fullscreen-sheet" style="filter: blur(0.5px);">
+          <h5 class="mb-2">Play music</h5>
+          <div class="input-icon mb-2"><span class="input-icon-addon"><i class="fe fe-search"></i></span><input class="form-control" value="bowie"></div>
+        </div>
+        <div class="sheet-backdrop"></div>
+        <div class="sheet">
+          <div class="sheet-grip"></div>
+          <h5 class="mb-1">Play "Heroes" on…</h5>
+          <div class="room-head">Living room</div>
+          <div class="player-row selected"><div class="icon"><i class="fe fe-speaker"></i></div><div class="text"><div class="name">Sonos One</div><div class="status"><span class="eq"></span>Playing</div></div><i class="fe fe-check text-primary"></i></div>
+          <div class="room-head">Kitchen</div>
+          <div class="player-row"><div class="icon"><i class="fe fe-cast"></i></div><div class="text"><div class="name">Nest Mini</div><div class="status">Playing · FIP</div></div></div>
+          <div class="room-head">Office</div>
+          <div class="player-row"><div class="icon"><i class="fe fe-speaker"></i></div><div class="text"><div class="name">WiiM Pro</div><div class="status">Paused</div></div></div>
+          <div class="player-row disabled"><div class="icon"><i class="fe fe-airplay"></i></div><div class="text"><div class="name">HomePod</div><div class="status">Notifications only</div></div></div>
+          <div class="btn-group d-flex mt-3"><button class="btn btn-secondary active flex-fill">Replace</button><button class="btn btn-secondary flex-fill">Next</button><button class="btn btn-secondary flex-fill">Queue</button></div>
+          <button class="btn btn-primary btn-block mt-3"><i class="fe fe-play mr-2"></i>Play</button>
+        </div>
+      </div>
+      <div class="caption">"Where" as a bottom sheet</div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<div class="frame" id="scene-action" style="width: 820px;">
+  <div class="frame-title">Scene editor — new action "Play music" (music.play)</div>
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title"><i class="fe fe-music mr-2"></i>Play music</div>
+      <div class="card-options"><a class="card-options-remove"><i class="fe fe-x"></i></a></div>
+    </div>
+    <div class="card-body">
+      <div class="row">
+        <div class="col-md-6">
+          <div class="form-group">
+            <label class="form-label">Player</label>
+            <select class="form-control custom-select"><option>Kitchen · Nest Mini</option></select>
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div class="form-group">
+            <label class="form-label">What to play</label>
+            <div class="d-flex align-items-center p-2" style="border:1px solid rgba(0,40,100,.12);border-radius:3px;">
+              <div class="art art-fip mr-2" style="width:32px;height:32px;background-image: linear-gradient(135deg, #e84393 0%, #fd79a8 100%);"><div class="art-glyph"><i class="fe fe-radio"></i></div></div>
+              <div style="flex:1;min-width:0;"><div class="font-weight-bold" style="font-size:14px;">FIP</div><div class="small text-muted">Radio · Radios</div></div>
+              <button class="btn btn-sm btn-secondary"><i class="fe fe-search mr-1"></i>Change</button>
+            </div>
+            <small class="form-text text-muted">Search a source, or paste a stream URL (https://…).</small>
+          </div>
+        </div>
+      </div>
+      <div class="row">
+        <div class="col-md-6">
+          <div class="form-group mb-0">
+            <label class="form-label">Mode</label>
+            <div class="btn-group"><button class="btn btn-secondary active">Replace</button><button class="btn btn-secondary">Play next</button><button class="btn btn-secondary">Add to queue</button></div>
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div class="form-group mb-0">
+            <label class="form-label">Volume (optional)</label>
+            <div class="volume-row"><i class="fe fe-volume-1"></i><input type="range" class="custom-range" value="25"><span style="width:28px;font-size:13px;">25</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="caption">Stored as <code>{ type: "music.play", device, uri: "radio://radio/fip", label: "FIP", enqueue: "replace", volume: 25 }</code></div>
+</div>
+
+</body>
+</html>

@@ -158,12 +158,14 @@ A media player declares what it can play with params of the reserved `GLADYS_*` 
 
 | Param | Value | Meaning | Standard |
 |---|---|---|---|
-| `GLADYS_MUSIC_URL_PLAYBACK` | `"true"` | plays media **by URL**: any streamable source, direct URLs | Matter Content Launcher `UrlPlayback` |
-| `GLADYS_MUSIC_NATIVE_PLAYBACK` | `"true"` | plays **natively** the media of the source of its own service | Matter Content Launcher `ContentSearch` |
-| `GLADYS_MUSIC_ENQUEUE` | `"true"` | honours `next` and `add`; without it, only `replace` is sent | Home Assistant `MEDIA_ENQUEUE` |
+| `GLADYS_MUSIC_URL_PLAYBACK` | `"true"` / `"false"` | plays media **by URL**: any streamable source, direct URLs | Matter Content Launcher `UrlPlayback` |
+| `GLADYS_MUSIC_NATIVE_PLAYBACK` | `"true"` / `"false"` | plays **natively** the media of the source of its own service | Matter Content Launcher `ContentSearch` |
+| `GLADYS_MUSIC_ENQUEUE` | `"true"` / `"false"` | honours `next` and `add`; without it, only `replace` is sent | Home Assistant `MEDIA_ENQUEUE` |
 
-- Absent means `false`. Any other value, or an undefined `GLADYS_MUSIC_*` key, is refused: `400` on an external publication (the existing reserved-namespace rule), `BadParameters` in `device.create` and `device.setParam` for every other caller. They are refused on a device that is not a player (no `playback_state`).
-- Who writes them: an internal service in the devices it creates (and in its existing devices at start, F.2); an external integration in its device publication, silently upserted on republication like `GLADYS_TRANSPORT`; the user in the MQTT setup UI (F.3).
+- Absent means `false`. `"false"` exists so that a declaration can be **withdrawn**: a republication only inserts or updates params (`upsertDeviceParams`), it never removes one, so an integration revokes a capability by publishing `"false"` (the trap `GLADYS_TRANSPORT_DEGRADED` fell into).
+- Any other value, or an undefined `GLADYS_MUSIC_*` key, is refused — `400` on an external publication (the existing reserved-namespace rule), `BadParameters` on every other path that writes params: `device.create`, `device.addParam`, `device.setParam`. They are refused on a device that is not a player (no `playback_state`), and `GLADYS_MUSIC_NATIVE_PLAYBACK` on a device whose service is not a source (no `music_source` in the manifest, no `service.music.search`).
+- Who writes them: an internal service in the devices it creates (and in its existing devices at start, F.2); an external integration in its device publication, silently upserted on republication like `GLADYS_TRANSPORT`; the user in the MQTT setup UI (F.3). They are the owner's declaration: the user does not override an external integration's (its next republication would restore them anyway).
+- `device.create` deletes every param missing from the posted device: a page that re-posts a device keeps its params, as for any param today. The MQTT setup UI drops the `GLADYS_MUSIC_*` params when the device loses its `playback_state` feature.
 
 | Device | URL | Native | Enqueue |
 |---|---|---|---|
@@ -602,13 +604,13 @@ The maintainer's signature, plus the caller's service so that every rule lives h
 3. **`null` means nothing is loaded.**
 4. **Strict schema** (Joi, E.3, unknown keys refused). A violation is a `BadParameters` returned to the caller with the path and the rule — `now_playing.position: must be less than or equal to ref:duration` — never a warning in a log.
 5. **The core owns the clock.** `position_updated_at` is set to the reception time when the record has a `position` without it. It is accepted from callers that share the core's clock — internal services, and external integrations, which are containers on the same host (the SDK stamps it, E.4) — and refused from MQTT, whose bridges run on other machines (an ESP32 without NTP). A retained MQTT delivery loses its `position`: its age is unknown.
-6. **The record follows the transport state.** The music module listens to the state event the core already emits for every saved state (`EVENTS.TRIGGERS.CHECK`, which carries `previous_value`) on `playback_state`, and re-anchors the record of that device: leaving `PLAYING`, `position` advances by the elapsed time (bounded by `duration`) and `position_updated_at` becomes now; entering `PLAYING`, `position_updated_at` becomes now. The event of E.2 is then emitted. Whatever arrives first — the new `playback_state` on `POST /state` (not awaited) or the player's new record — the record never extrapolates across a pause.
+6. **The record follows the transport state.** The music module listens to the state event the core already emits for every saved state (`EVENTS.TRIGGERS.CHECK`, which carries `previous_value`; the Gladys Plus gateway and HomeKit already consume it) on `playback_state`, acts only when `previous_value` differs from `last_value` (the event also fires when an unchanged value is saved again), and re-anchors the record of that device: leaving `PLAYING`, `position` advances by the elapsed time (bounded by `duration`) and `position_updated_at` becomes now; entering `PLAYING`, `position_updated_at` becomes now. The event of E.2 is then emitted. Whatever arrives first — the new `playback_state` on `POST /state` (not awaited) or the player's new record — the record never extrapolates across a pause.
 7. **Nothing changed, nothing sent.** A record whose fields other than the position are unchanged, and whose position agrees within 2 s with the stored one extrapolated to now, changes nothing and emits nothing: the SDK replay and MQTT redeliveries do not make the widget blink.
 8. **A notification does not touch it**: the core never calls `setNowPlaying` when it plays a notification (D, E.6).
 
 On change the core emits the WebSocket event **`music.now-playing-updated`** `{ device: <device selector>, now_playing }` to all users (`<domain>.<kebab-event>`, like `thermostat.config-updated`; forwarded through Gladys Plus like every event).
 
-**Displayed position** (normative, front and AI alike): while `playback_state` is `PLAYING`, `position + (now − position_updated_at)`, bounded to `[0, duration]`; otherwise `position`. No position is shown for a record without `duration` (a live stream: `LIVE` badge, H.1).
+**Displayed position** (normative, front and AI alike): while `playback_state` is `PLAYING`, `position + (now − position_updated_at)`, bounded to `[0, duration]`; otherwise `position`. No position is shown for a record without `duration` (a live stream: `LIVE` badge, H.1). `device.saveState` sends `device.new-state` before the core re-anchors (rule 6), so the front applies the same re-anchoring locally when it sees `playback_state` change — compared with the previous value it holds, not with `last_value_changed`, which every save refreshes — until `music.now-playing-updated` brings the core's record.
 
 ### E.3 The record
 
@@ -658,7 +660,7 @@ The shape mirrors `POST /api/integration/v1/camera/image` → `gladys.device.cam
 **MQTT details.**
 - The handler (`handleGladysMessage`) routes `gladys/master/device/:id/music/…` before its feature branch. Today such a topic would be parsed as a numeric state of a feature named `now_playing` and dropped, so an older core ignores it harmlessly.
 - The client's `message` callback passes the `retain` flag through (today `connect.js` passes `message.toString()` only), so that a retained delivery loses its `position` (E.2).
-- A retained record published before its device existed was delivered and dropped: when an MQTT device is created, the core subscribes again to its `…/music/now_playing` topic to read it.
+- A retained record published before its device existed was delivered and dropped: when an MQTT device is created, the core subscribes to its `…/music/now_playing` topic to read the retained message, then unsubscribes — `gladys/master/#` keeps delivering the later ones, and a lasting second subscription would deliver each of them twice.
 - A bridge SHOULD set a Last Will that publishes an empty retained payload on its `…/music/now_playing` topics, so that a dead bridge clears its records (E.5).
 - Strictness has a cost on MQTT: a bridge has no `gladys_version` range, so one that sends a field added in a later Gladys is refused by an older core — and says so on the error topic.
 
@@ -681,7 +683,7 @@ No table, no migration, no `last_value_string`. The data is volatile by nature: 
 | External integrations | the SDK replays the last record of each device at reconnection (E.4) |
 | MQTT | the broker re-delivers the retained message when the core subscribes |
 
-**A player is reachable** when its owner can talk to it: the internal service is running, the external integration is connected, the MQTT broker is connected. The record of an unreachable player is cleared (event with `null`), and one helper does it on every path that ends reachability:
+**A player is reachable** when its owner can talk to it — the internal service is running, the external integration is connected, the MQTT broker is connected — and, for an external integration's device, when it is not published as `GLADYS_TRANSPORT = unreachable` (`setDeviceTransports`: an offline Spotify Connect device). The record of an unreachable player is cleared (event with `null`), and one helper does it on every path that ends reachability:
 
 - **the device is destroyed** — a call in `device.destroy`, which emits no deletion event today;
 - **the internal service stops**;
@@ -695,7 +697,7 @@ The precedent is the external integrations' connection status, "kept in memory o
 ### E.6 What a player must do
 
 - **Publish on changes only**: track change, seek, stop — never every second. Pause and resume are re-anchored by the core from `playback_state` (E.2); a player that knows the exact position SHOULD still republish then, which corrects the estimate.
-- **Never publish a notification as the now playing.** The core sees a notification start, not end; only the player knows when the previous media is back. A player whose protocol reports the notification as a track (Sonos `AVTransport` events during `PlayNotification`) filters it out until the previous media is restored.
+- **Never publish a notification as the now playing.** The core sees a notification start, not end; only the player knows when the previous media is back. A player whose protocol reports the notification as a track (Sonos `AVTransport` events during `PlayNotification`) filters it out until the previous media is restored — its track **and its transport transitions** (PLAYING → BUFFERING → STOPPED → PLAYING around a Sonos notification would otherwise re-anchor the interrupted media, rule 6, and fire scenes). After the restore it republishes the record with the current position.
 - Set `uri` only for a media a source can name, and `image` according to E.7.
 - Publish `null` when nothing is loaded anymore (queue cleared, input switched to a TV with no metadata).
 
@@ -749,7 +751,7 @@ What the frontend receives:
 
 - `server/utils/constants.js`: `MUSIC_PLAYBACK_STATE` extended, `MUSIC_ENQUEUE`, `MUSIC_MEDIA_TYPES`, the `GLADYS_MUSIC_*` param names, `ACTIONS.MUSIC.PLAY`, `AI_CHAT_TOOL_CATEGORIES.MUSIC`, WebSocket types `music.now-playing-updated` and `external-integration.music.{search,resolve,get-image,play}`. No new feature type.
 - `server/lib/music/` (new): source registry, `search`, `play`, `choosePlayer`, compatibility, the now playing store (`setNowPlaying`, `getNowPlaying`, the re-anchoring listener on `playback_state`, the clearing helper), the Joi schemas of the records, image cache, normalizers.
-- Reserved params: the `GLADYS_MUSIC_*` keys join the external-integration allowlist of the `GLADYS_*` namespace, and `device.create` / `device.setParam` validate them for every other caller (A.3).
+- Reserved params: the `GLADYS_MUSIC_*` keys join the external-integration allowlist of the `GLADYS_*` namespace, and `device.create`, `device.addParam` and `device.setParam` validate them for every other caller (A.3).
 - Clearing hooks (E.5): `device.destroy`; internal service stop; every `connections.delete(service.id)` of `server/lib/external-integration/` (`integrationDisconnected`, `stop`, `uninstall`); MQTT broker disconnection.
 - `server/lib/scene/scene.actions.js`: new `music.play` action (H.4).
 - `server/lib/external-integration/`: `music_source` manifest field; `music.*` messages on the proxy service; `POST /api/integration/v1/music/now_playing`.
@@ -767,7 +769,7 @@ What the frontend receives:
 | `google-cast` | 1 | **Keeps one connection per device** (new: today a client is created per notification) to read the media status — needed for the now playing at start (E.5) and for the transport features; params URL playback and enqueue; `service.music.play` through the default receiver's `queueLoad`/`queueInsert`; `play`/`pause`/`next`/`previous`/`volume`/`playback_state` (the Nest Mini becomes a player and appears in the Music widget); phase 2: resume after notification (D) |
 | `airplay` | 3 | Params URL playback and enqueue; `service.music.play` plays the items one by one through its ffmpeg pipeline, without the 5-minute notification cap, and keeps the list itself (C.3); `playback_state`, `pause` (stops the pipeline); now playing from what it sends. AirPlay has no queue of its own and no remote metadata to read |
 
-**Existing devices are upgraded at service start.** The Sonos, Google Cast and AirPlay discovery tabs mark a known `external_id` as "already created" and never post it again (`front/src/routes/integration/all/sonos/discover-page/DiscoverTab.jsx`), so "on the next scan" would never happen. At start, each of these services walks its created devices and, by `external_id`: adds the missing features (`device.addFeature` — the Cast transport features), raises the `playback_state` `max` to 3 (`device.updateFeature`), and sets the `GLADYS_MUSIC_*` params (`device.setParam`). Selectors, rooms and the scenes using them are kept; the upgrade is idempotent and tested. No `device.migrate` entry: nothing is renamed or removed, and no dashboard box field references a new feature (the Music box references a device).
+**Existing devices are upgraded at service start.** The Sonos, Google Cast and AirPlay discovery tabs mark a known `external_id` as "already created" and never post it again (`front/src/routes/integration/all/sonos/discover-page/DiscoverTab.jsx`), so "on the next scan" would never happen. At start, each of these services walks its created devices and, by `external_id`: adds the missing features (`device.addFeature` — the Cast transport features), raises the `playback_state` `max` to 3 (`device.updateFeature`), and sets the `GLADYS_MUSIC_*` params (`device.addParam`, which refreshes the device in memory like `addFeature` and `updateFeature` do — `device.setParam` writes the database only, and the music module reads the in-memory device, loaded by `device.init` before the services start). Selectors, rooms and the scenes using them are kept; the upgrade is idempotent and tested. No `device.migrate` entry: nothing is renamed or removed, and no dashboard box field references a new feature (the Music box references a device).
 
 ### F.3 MQTT
 
@@ -787,7 +789,7 @@ What the frontend receives:
 
 ### F.5 Backward compatibility
 
-- No type, value, route, message or event changes meaning. `MUSIC_PLAYBACK_STATE` is extended append-only: a condition `playback_state = 0` still means paused, but a scene using `> 0` as "playing" now also matches `STOPPED` and `BUFFERING` — the release notes say so, and the editor's labels name the states.
+- No type, route, message or event changes meaning. `MUSIC_PLAYBACK_STATE` is extended append-only: a condition `playback_state = 0` still means paused. **One exception:** a scene using `> 0` as "playing" now also matches `STOPPED` and `BUFFERING` — the release notes say so, and the editor's labels name the states.
 - A player with no now playing record that is not a media player looks exactly as today in the widget and in scenes; the widget hides the search and artwork areas for it.
 - Existing `music` boxes (`{ type: 'music', device }`) render with the new defaults (H.1) without a dashboard migration.
 - `play_notification` gains nothing mandatory; the resume behavior (D) is a SHOULD.
@@ -856,6 +858,7 @@ Live updates: `device.new-state` (volume, playback state — today) **and** `mus
 | yes | a record | `PAUSED`, `STOPPED` | the media, the position frozen, play button |
 | yes | a record | `BUFFERING` | the media, a loading indicator, the position frozen |
 | yes | `null` | `PLAYING` | "Playing", without metadata — a player that reports none |
+| yes | `null` | `BUFFERING` | "Loading…" |
 | yes | `null` | `PAUSED`, `STOPPED` | "Nothing playing", with "Play something…" on a media player |
 
 **Mockups:**

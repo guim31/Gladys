@@ -10,8 +10,9 @@
 >
 > - "Now playing" is no longer a JSON document in a feature's `last_value_string`: it is a **record owned by the core**, held in memory, with one entry point, a strict schema and typed transports in and out (E) — the maintainer's model, adopted as proposed and detailed.
 > - The same rule is applied to the command: "play this" is a record the core builds, so it travels on **typed music transports** (internal call, `external-integration.music.play`, MQTT `…/music/play`) instead of riding in `setValue`'s `options` (C.3). The generic device path, the `external-integration.device.set-value` message and the MQTT state topics are untouched: "payload = the value as a string" holds everywhere.
-> - `play-media` carries **no `supported_options`** anymore: its presence means "plays media by URL" and native playback follows from ownership (Matter's Content Launcher split, C.2); queueing is part of every player's contract.
-> - Closed: former open questions 3 (now playing storage), 4 (MQTT JSON payload), 9 (artwork of relayed media), 11 (`play-media` on the generic value route).
+> - **No new feature type at all.** A player is a device with a `playback_state`; what it can play (by URL, natively, with a queue) is declared per device in reserved `GLADYS_MUSIC_*` params — Matter's Content Launcher feature bits — instead of capability flags in `supported_options` (A.3, C.2).
+> - The core owns the clock of the position and the lifecycle of the record (E.2, E.5); existing Sonos and Cast devices are upgraded at service start (F.2).
+> - Closed: former open questions 2 (naming of the new types: there are none), 3 (now playing storage), 4 (MQTT JSON payload), 9 (artwork of relayed media), 11 (`play-media` on the generic value route).
 
 ## Context
 
@@ -34,9 +35,9 @@ The maintainer's answer (quoted in the forum thread) frames the work: it is **co
 1. **Players stay devices, sources are services.** A speaker is a thing in a room with features (volume, playback state); a catalog is not. A player is a device of the `music` category; a source is a service — internal or external — that implements a small search/resolve interface, exactly as a weather provider implements `weather.get`.
 2. **Nothing that works today breaks.** Every existing `music` type, every scene, every MQTT setup and every external integration keeps working unchanged. New capabilities are additive.
 3. **Features carry values; music records are core objects.** A feature holds one atomic value that every generic consumer can handle — scene triggers, the device page, the MQTT state topics, the AI's `device.get-state` (`device-feature-categories.md` rule 5). What the music domain needs beyond that — what is playing (E), and the request "play this" (C) — are **records** whose fields the core must understand. They live in `server/lib/music/`, behind one entry point with a strict schema, and travel on **typed transports** in both directions (a direct call for internal services, a dedicated host-API endpoint or WebSocket message for external integrations, a dedicated MQTT topic). The generic device path is not touched. A media itself is named by one string, the **media URI** (`ext-navidrome://album/al-42`): an identifier any consumer can carry.
-4. **Capabilities follow the standard, without flags.** Matter's Content Launcher separates "play a URL" (`UrlPlayback`) from "play my own content" (`ContentSearch`). So does this spec: a `play-media` feature means "plays media by URL", and native playback follows from ownership — a source plays its own media on its own devices. No capability flag hides in `supported_options` (C.2).
+4. **Capabilities are declared, never sent.** Matter's Content Launcher separates "play a URL" (`UrlPlayback`) from "play my own content" (`ContentSearch`), as feature bits of each endpoint. So does this spec: each media player declares them in reserved device params (`GLADYS_MUSIC_*`, A.3). They are not feature values, so no value picker, trigger or state topic ever sees them (C.2).
 5. **The core never streams audio and never fetches a URL it was handed.** Sources hand playable URLs to players; artwork travels as bytes through the owning service. No transcoding, no stream proxy, no SSRF surface (G).
-6. **A few dozen lines for an integration author.** Becoming a source is three SDK handlers; becoming a player is one feature declaration and one `onMusicPlay` handler; reporting what plays is one `publishNowPlaying` call (B.4, F.4).
+6. **A few dozen lines for an integration author.** Becoming a source is three SDK handlers; becoming a media player is one or two params and one `onMusicPlay` handler; reporting what plays is one `publishNowPlaying` call (B.4, F.4).
 
 ## Precedents (verified in the code, v5.2.1)
 
@@ -80,6 +81,8 @@ No service reports a title, an artist or an artwork anywhere.
 - External integrations' connection status: `connectionStatuses` (a `Map` in `server/lib/external-integration/index.js`), pushed with `external-integration.connection-status-updated`, served by `GET /api/v1/external_integration/:selector` — "kept in memory only (lost at restart, republished by the integration)" (`externalIntegration.setConnectionStatus.js`). The discovered devices of external integrations, Zigbee2mqtt and the MQTT Home Assistant discovery follow the same pattern (memory + event + read route).
 - **A dedicated endpoint for a payload that is not a feature value**: `POST /api/integration/v1/camera/image` `{ device_external_id, image }` → `gladys.device.camera.setImage`, `404` if the device does not belong to the integration, `400` if it has no camera feature, its own rate limit (12 images/min per device) outside `POST /state` (`docs/specs/external-integrations/contracts/host-api-endpoints.md`).
 - Host-API errors: a `BadParameters` thrown by the core becomes `400 { status, code: 'BAD_REQUEST', message }` (`errorMiddleware`); Joi-validated contracts turn the first failure into `BadParameters('<path>: <message>')` (`server/lib/energy-contract/contract.validate.js`). Rate limits are in-memory fixed windows per endpoint (`server/lib/external-integration/constants.js`).
+- **Reserved device params.** Params named `GLADYS_*` are reserved for semantics the core defines and validates: `GLADYS_TRANSPORT` (`local` / `cloud` / `unreachable`), `GLADYS_TRANSPORT_DEGRADED` (`"true"` or absent) — declarative per-device data published by the integration, silently upserted on republication, rendered by the front as a pill; any undefined `GLADYS_*` key is refused with `400` (`server/lib/external-integration/constants.js`, `contracts/host-api-endpoints.md`). The thermostat keeps its configuration in core-named params too (`THERMOSTAT_*_FEATURE`, `thermostat.md`).
+- Reachability paths: an external integration's connection is dropped by `integrationDisconnected` (WebSocket closed, status `DEGRADED`), by `stop` and by `uninstall` (status `STOPPED`, without going through `DEGRADED`). `device.destroy` emits no deletion event. The MQTT client's `message` callback passes `message.toString()` only (no `retain` flag), and `publish()` logs every payload at `debug`.
 - The SDK (`@gladysassistant/integration-sdk` 0.15.0) re-authenticates after a WebSocket drop, re-reads `GET /device` and `GET /config`, emits `connected`, and **replays nothing**: the template republishes its discovered devices and transports from that event. Messages sent while disconnected are dropped.
 
 **Providers and images in the external-integration contract**
@@ -107,28 +110,20 @@ No service reports a title, an artist or an artwork anywhere.
 
 ### A.1 What a player is (Q1)
 
-Two notions, both read from the device's features and owner — no new flag:
+Two notions, read from the device itself — no new feature type:
 
-- A **music device** is a device with at least one feature of the `music` category. It shows in the Music widget, carries the transport features it has, and can report what it plays (E). An amplifier, a TV or a Bluetooth speaker that only reports its current track is a music device.
-- A **media player** is a music device that can receive "play this" (C): it has a `play-media` feature (A.3: it plays media by URL, from any streamable source), **or** it belongs to the service of a source that declares native playback (C.2) — the Spotify integration's Connect devices, a Lyrion player.
+- A **player** is a device with a `music` / `playback_state` feature. It shows in the Music widget with the transport features it has, and it can report what it plays (E). A record of what plays cannot be read without a transport state (is the position moving? is the player idle?), hence the requirement — the maintainer's "refuse if the device is not a player". A device that only exposes `play_notification` (a Nest Mini today) is not a player.
+- A **media player** is a player that can receive "play this" (C). It says so with **reserved device params** (A.3): it plays media by URL, and/or it plays natively the catalog of its own service.
 
-**Decision on Q1 — the transport stays one feature per command; `supported_options` stay for values a user picks.**
+**Decision on Q1 — the transport stays one feature per command; capabilities are declared, never sent.**
 
 - The existing transport types (`play`, `pause`, `previous`, `next`, `volume`, `playback_state`, `play_notification`) are **kept unchanged**. They are deployed on three internal services and in external integrations, users' scenes reference them by feature selector, and they already are Matter's model: the Media Playback cluster has one command per transport action next to one `CurrentState` attribute. A missing command (`stop`, phase 3) is added the same way, as one more type mapping one Matter command.
 - `camera.move` groups the values of **one** quantity — the directions of one movement, released by `STOP = 0` — into one feature. Transport commands are not values of one quantity, and the standard keeps them apart. A single `transport` feature would also break every scene that uses the current ones (see Alternatives; the final call is open question 1).
-- `supported_options` keep their meaning: **values a user sends**, rendered as controls (a future `repeat` feature: off / one / all). They never carry capability flags: what a player can play follows from the presence of `play-media` and from ownership (C.2).
+- `supported_options` keep their meaning: **values a user sends**, rendered as controls (a future `repeat` feature: off / one / all). What a player *can play* is not a value anyone sends: it is declared once per device, in reserved params (A.3), the way Matter declares a cluster's feature bits per endpoint.
 
 ### A.2 New types and enum changes
 
-`DEVICE_FEATURE_TYPES.MUSIC` gains **one** type (`server/utils/constants.js`):
-
-| Type | Constant | Role | Value | `read_only` | `min`/`max` | `has_feedback` | `keep_history` |
-|---|---|---|---|---|---|---|---|
-| `play-media` | `PLAY_MEDIA` | declaration: the player plays media by URL (A.3) | none — never written through `setValue` | `false` | — / — | `false` | `false` |
-
-What is playing is **not** a feature type (E).
-
-**Naming:** the new type uses kebab-case (rule 7 of `device-feature-categories.md`), next to the legacy underscored siblings (`play_notification`, `playback_state`), which are not renamed — renaming is the breaking mistake rule 7 warns about. The mixed spelling inside one category is ugly; open question 2 asks the maintainer to pick.
+**No new feature type.** What plays is a core record (E), the play request is a core command (C), and what a player can play is declared in params (A.3).
 
 **`MUSIC_PLAYBACK_STATE` is extended, append-only:**
 
@@ -141,7 +136,7 @@ const MUSIC_PLAYBACK_STATE = {
 };
 ```
 
-`0` and `1` keep their meaning, so every existing scene condition and the current widget are unaffected. A player that cannot tell `STOPPED` from `PAUSED` keeps publishing `0`. The widget uses `STOPPED` to show its idle state (H.1).
+`0` and `1` keep their meaning, so every `=` condition and the current widget are unaffected. A player that cannot tell `STOPPED` from `PAUSED` keeps publishing `0`. The widget uses `STOPPED` to show its idle state (H.1). Scenes using `>`/`<` on this feature change meaning (F.5). Existing players raise their `playback_state` `max` to 3 (F.2).
 
 **New request enum (not stored, used by the API, the scene action, the AI tool and the play request of C.3):**
 
@@ -155,22 +150,31 @@ const MUSIC_ENQUEUE = {
 
 **New media-type list (search filter, URI segment, item `type`):** `track`, `album`, `artist`, `playlist`, `radio`. Append-only (`podcast`, `audiobook` are expected later). Lowercase singular, the Music Assistant vocabulary.
 
-**No schema migration.** Types are Sequelize ENUMs generated from the constants (TEXT in SQLite), `t_device_feature_supported_option` is unchanged, and nothing music-related is persisted outside the existing tables (E.5).
+**No schema migration.** `t_device_param` and `t_device_feature` are unchanged, and nothing music-related is persisted outside the existing tables (E.5).
 
-### A.3 The `play-media` feature
+### A.3 What a media player declares: reserved device params
 
-A player that plays media **by URL** declares one `play-media` feature — Matter's Content Launcher `UrlPlayback`. Its presence is the whole declaration: the player accepts HTTP(S) streams, hence media from any streamable source and direct URLs (C.2).
+A media player declares what it can play with params of the reserved `GLADYS_*` namespace — the one the core already validates for `GLADYS_TRANSPORT` (`server/lib/external-integration/constants.js`):
 
-| Player | `play-media` | Plays |
-|---|---|---|
-| Sonos, Google Cast, LinkPlay/WiiM, MPD, DLNA renderer, VLC, AirPlay… | yes | any streamable source, direct URLs |
-| Lyrion player (its integration is also a native source) | yes | any streamable source, and the Lyrion library natively |
-| Spotify Connect device (owned by the Spotify integration) | **no** | Spotify media only, natively (C.2) |
-| A TV or an amplifier that only reports its track | no | nothing — a music device, not a media player |
+| Param | Value | Meaning | Standard |
+|---|---|---|---|
+| `GLADYS_MUSIC_URL_PLAYBACK` | `"true"` | plays media **by URL**: any streamable source, direct URLs | Matter Content Launcher `UrlPlayback` |
+| `GLADYS_MUSIC_NATIVE_PLAYBACK` | `"true"` | plays **natively** the media of the source of its own service | Matter Content Launcher `ContentSearch` |
+| `GLADYS_MUSIC_ENQUEUE` | `"true"` | honours `next` and `add`; without it, only `replace` is sent | Home Assistant `MEDIA_ENQUEUE` |
 
-- **No `supported_options`.** There is no value to pick. `normalizeSupportedOptions`, which already scopes option domains by feature type, refuses options on `play-media`. Queueing is not a capability either: `replace`, `next` and `add` belong to every media player's contract (C.3).
-- **Never written through the generic path.** The only writer is `gladys.music.play` (C.1), and it does not call `device.setValue`: the request is a record and travels on the music transports (C.3). `device.setValue` refuses a `play-media` feature (`BadParameters`: "play-media is driven by the music API"), and no generic control offers it: the scene `device.set-value` picker, the device-state trigger and the condition exclude it, and it stays out of `SUPPORTED_FEATURE_TYPES_BY_CATEGORY`.
-- **No state.** What plays is a core record (E), not the state of this feature. A feature that holds no value is the one place where this model bends the feature mechanism; it is preferred to a flag hidden in `supported_options` because it is typed, per device, persisted, and offered to nobody as a value (open question 3).
+- Absent means `false`. Any other value, or an undefined `GLADYS_MUSIC_*` key, is refused: `400` on an external publication (the existing reserved-namespace rule), `BadParameters` in `device.create` and `device.setParam` for every other caller. They are refused on a device that is not a player (no `playback_state`).
+- Who writes them: an internal service in the devices it creates (and in its existing devices at start, F.2); an external integration in its device publication, silently upserted on republication like `GLADYS_TRANSPORT`; the user in the MQTT setup UI (F.3).
+
+| Device | URL | Native | Enqueue |
+|---|---|---|---|
+| Sonos, Google Cast, LinkPlay/WiiM, MPD | ✓ | | ✓ |
+| AirPlay (the service keeps the list, C.3) | ✓ | | ✓ |
+| DLNA renderer | ✓ | | ✓ only if the integration keeps a list or the renderer has `SetNextAVTransportURI` |
+| Lyrion player (its integration is also a source) | ✓ | ✓ | ✓ |
+| Spotify Connect device (the Spotify integration is a source) | | ✓ | — (the Web API queues one track at a time) |
+| A Plex client that cannot be driven, a TV that only reports its track | | | — a player, not a media player |
+
+**Why params, and not a feature or `supported_options`:** the declaration is per device, persisted with it, written by its owner and validated by the core, like `GLADYS_TRANSPORT` and the thermostat's configuration params. It is **not a value**: no value picker, trigger, chart or MQTT state topic ever sees it, so nothing in the generic device path needs an exception. A feature that holds no value (revision 2's first draft) needed exclusions in `setValue`, `newStateEvent`, eleven feature pickers and the MQTT catalog; capability flags in `supported_options` (revision 1) were offered as values by the scene editor (Alternatives).
 
 ### A.4 The media URI (Q2)
 
@@ -186,7 +190,9 @@ A media is named by **one string**:
 
 Examples: `ext-navidrome://album/al-42` (an external Navidrome integration), `radio://radio/fip` (the internal `radio` source), `ext-spotify://playlist/37i9dQZF1DXcBWIGoYBM5M`.
 
-**Direct URLs.** `http://…` and `https://…` are accepted as a media URI of implicit type `track` with no source: "play this stream". They exist for scenes and power users (a web radio URL pasted in a scene), are playable only on players with `play-media`, and are refused from the AI tool (G.1).
+**Direct URLs.** `http://…` and `https://…` are accepted as a media URI of implicit type `track` with no source: "play this stream". They exist for scenes and power users (a web radio URL pasted in a scene), are playable only on players declaring URL playback, and are refused from the AI tools (G.1).
+
+**Stability.** Scenes store URIs, so a source MUST keep `<id>` stable across rescans and restarts (a Navidrome id, not a row number). A stored URI that no longer resolves fails with `404 MUSIC_MEDIA_NOT_FOUND`, and the scene action reports it. The source key is the service selector: a URI is meaningful on its own instance only, like every selector stored in a scene.
 
 Why a string: a media is **named**, and a name is the one thing every consumer can carry — a scene field, a chat tool argument, a dashboard box setting, a log line. The URI is an identifier, opaque outside `server/lib/music/`. The structure a speaker needs (one URL per track, titles, artwork keys) is a separate record, built **by the core at play time** (C.1), never stored and never typed by a user.
 
@@ -202,16 +208,14 @@ A source declares, once, its **descriptor**:
 {
   "name": "Navidrome",
   "media_types": ["track", "album", "artist", "playlist"],
-  "streamable": true,
-  "native": false
+  "streamable": true
 }
 ```
 
 - `name` — display name (≤ 40 chars).
 - `media_types` — the subset of A.2 types it can search and resolve.
-- `streamable` — `true` when `resolve` returns HTTP(S) URLs any player with `play-media` can fetch; `false` for a source whose content has no stream outside its own players (Spotify: no stream URL exists outside Spotify Connect).
-- `native` — `true` when the source's media can be played **natively on the music devices of its own service** (Matter's `ContentSearch`): the Spotify integration on its Connect devices, Lyrion on its players, Music Assistant on its players. `false` (default) for a catalog without players (Navidrome, a radio list).
-- At least one of the two is `true` (validation error otherwise: such a source could play nowhere).
+- `streamable` — `true` when `resolve` returns HTTP(S) URLs any player declaring URL playback can fetch; `false` for a source whose content has no stream outside its own players (Spotify: no stream URL exists outside Spotify Connect).
+- Native playback is not a property of the source but of each of its devices (`GLADYS_MUSIC_NATIVE_PLAYBACK`, A.3): the Spotify integration's Connect devices declare it, a Plex client that cannot be driven does not. A `streamable: false` source none of whose devices declares it plays nowhere; `GET /api/v1/music/source` says so (C.4).
 
 ### B.2 The source interface
 
@@ -261,7 +265,7 @@ Plus the descriptor: `music.getDescriptor()` for internal services, the manifest
 }
 ```
 
-`url` is `http:`/`https:` only; `mime_type` optional (the player sniffs otherwise); `duration` absent for a live radio. A resolve returns **at most 500 items** — an artist resolves to the source's choice (top tracks, shuffled discography…): the source knows its catalog better than the core. Ordering is the play order.
+`url` is `http:`/`https:` only; `mime_type` optional (the player sniffs otherwise); `duration` absent for a live radio. `uri` is **required**: the media URI of this very item, of the answering source (the same source check as `MediaItem`; the core fills it with the requested URI when a resolve returns a single item without one). It is what a player echoes in its now playing record, and what makes the record's `image` a source key (E.7): an item with an `image` and no `uri` is dropped. A resolve returns **at most 500 items** — an artist resolves to the source's choice (top tracks, shuffled discography…): the source knows its catalog better than the core. Ordering is the play order.
 
 **Search rules.** `query` is free text (≤ 200 chars, trimmed, non-empty). `types` empty = all the source's `media_types`. `limit` 1–50 (default 20), `offset` ≥ 0 — **pagination is per source**: the aggregated API (C.4) passes `limit`/`offset` to each source and returns each source's `has_more`; there is no global ranking across sources (relevance scores of two catalogs are not comparable). Each source returns items ordered by its own relevance; the core keeps that order.
 
@@ -274,7 +278,7 @@ An internal service becomes a source by exposing `service.music`:
 return {
   start, stop,
   music: {
-    getDescriptor: () => ({ name: 'Radios', media_types: ['radio'], streamable: true, native: false }),
+    getDescriptor: () => ({ name: 'Radios', media_types: ['radio'], streamable: true }),
     search: ({ query, limit, offset }) => radioHandler.search(query, limit, offset),
     resolve: ({ uri }) => radioHandler.resolve(uri),
     getImage: (key) => radioHandler.getImage(key),
@@ -297,8 +301,7 @@ The same `service.music` object carries `play(device, request)` when the service
   "name": "Navidrome",
   "music_source": {
     "media_types": ["track", "album", "artist", "playlist"],
-    "streamable": true,
-    "native": false
+    "streamable": true
   }
 }
 ```
@@ -336,8 +339,8 @@ gladys.onMusicSearch(async ({ query, types, limit, offset, language }) => {
 
 gladys.onMusicResolve(async ({ uri }) => ({
   items: (await subsonic.tracksOf(uri)).map((t) => ({
-    url: subsonic.streamUrl(t.id), title: t.title, artist: t.artist,
-    album: t.album, duration: t.duration, image: `cover-${t.coverArt}`,
+    uri: gladys.musicUri('track', t.id), url: subsonic.streamUrl(t.id), title: t.title,
+    artist: t.artist, album: t.album, duration: t.duration, image: `cover-${t.coverArt}`,
   })),
 }));
 
@@ -369,36 +372,37 @@ One core function, `gladys.music.play({ device, uri, enqueue = 'replace', volume
 
 1. **Player.** `device` is a media player (A.1), else `400 MUSIC_NOT_A_PLAYER`.
 2. **Parse** the URI (A.4), else `400 MUSIC_INVALID_URI`. Find the source by key, else `404 MUSIC_SOURCE_NOT_FOUND`.
-3. **Compatibility** (C.2), else `409 MUSIC_PLAYER_INCOMPATIBLE` with the reason (`not_streamable`: the source has no stream and the player is not its own; `no_url_playback`: the player has no `play-media`).
+3. **Compatibility** (C.2), else `409 MUSIC_PLAYER_INCOMPATIBLE` with the reason (`not_streamable`: the source has no stream and the player does not play it natively; `no_url_playback`: the player does not declare URL playback; `unreachable`: its owner is not connected, E.5). `enqueue` other than `replace` on a player that does not declare `GLADYS_MUSIC_ENQUEUE` → `409 MUSIC_ENQUEUE_UNSUPPORTED`.
 4. **Resolve.** *Native* route: nothing to resolve. *Stream* route: `source.music.resolve({ uri, player })` → `PlayableItem[]` (empty → `404 MUSIC_MEDIA_NOT_FOUND`). A direct `http(s)` URI resolves to one item `{ url: uri }` without any call.
 5. **Volume.** If `volume` (0–100) is given and the player has a `volume` feature, `device.setValue(volumeFeature, volume)` first — the existing path, no new contract.
 6. **Request.** Build the play request (C.3) and send it to **the service owning the device** on the music transport of its kind (internal call, `external-integration.music.play`, MQTT `…/music/play`).
 7. **Answer** `{ device, uri, route, items_count }` — never the URLs.
 
-**Why not `setValue`.** Revision 1 sent the URI as the value of the `play-media` feature and the expansion in `setValue`'s 4th argument, `options`. That is a record riding in the generic device path: every transport of that path would have needed a side channel (an `options` field in `external-integration.device.set-value`, a JSON exception on the MQTT state topic), whose shape depends on the feature type — the structured payload `camera-ptz-control.md` rejected, and the command-side twin of the now playing problem (E.1). "Play this" is a core command, like "now playing" is a core record: one entry point, a record built and validated by the core, typed transports. The generic path keeps carrying values only.
+**Why not `setValue`.** Revision 1 sent the URI as the value of a `play-media` feature and the expansion in `setValue`'s 4th argument, `options`. That is a record riding in the generic device path: every transport of that path would have needed a side channel (an `options` field in `external-integration.device.set-value`, a JSON exception on the MQTT state topic), whose shape depends on the feature type — the structured payload `camera-ptz-control.md` rejected, and the command-side twin of the now playing problem (E.1). "Play this" is a core command, like "now playing" is a core record: one entry point, a record built and validated by the core, typed transports. The generic path keeps carrying values only.
 
 ### C.2 Choosing a compatible player
 
-A media player `P` can play a media `M` of source `S` according to two facts only — does `P` have `play-media`, and does it belong to `S`'s service:
+A media player `P` can play a media `M` of source `S` according to its own declarations (A.3):
 
-| | `S.native` and `P` belongs to `S`'s service | otherwise |
+| | `P` declares native playback and belongs to `S`'s service | otherwise |
 |---|---|---|
-| `P` has `play-media` | **native** (wins) | **stream** if `S.streamable` or `M` is a direct URL, else incompatible |
-| `P` has no `play-media` | **native** | incompatible |
+| `P` declares URL playback | **native** (wins) | **stream** if `S.streamable` or `M` is a direct URL, else incompatible |
+| `P` does not declare URL playback | **native** | incompatible |
 
-Native is Matter's `ContentSearch` (the device plays its own catalog), stream is Matter's `UrlPlayback`. Native wins when both hold: a Lyrion player playing the Lyrion library natively keeps gapless playback and the server's own queue.
+Native is Matter's `ContentSearch` (the device plays its own catalog), stream is Matter's `UrlPlayback`. Native wins when both hold: a Lyrion player playing the Lyrion library natively keeps gapless playback and the server's own queue. A player whose owner is not reachable is never compatible (E.5).
 
-This is the whole answer to **"a source that only plays at home" (Spotify Connect)**: the Spotify integration declares `music_source` with `streamable: false, native: true` and publishes its Connect devices as music devices **without** `play-media`. Spotify media are compatible with those devices only; a Navidrome album is compatible with the Sonos (it has `play-media`) and not with the Spotify devices (they have none). Nothing Spotify-specific exists in the core, and no capability flag hides in a feature: the source says `native` once, in its descriptor. The same rule covers Echo devices driven by an Alexa integration, Plexamp, Music Assistant (`streamable: false, native: true`: every request goes to its own players).
+This is the whole answer to **"a source that only plays at home" (Spotify Connect)**: the Spotify integration declares `music_source` with `streamable: false`, and its Connect devices declare `GLADYS_MUSIC_NATIVE_PLAYBACK` only. Spotify media are compatible with those devices only; a Navidrome album is compatible with the Sonos (URL playback) and not with the Spotify devices. Nothing Spotify-specific exists in the core. The same rule covers Echo devices driven by an Alexa integration, Plexamp, Music Assistant (a `streamable: false` source whose players declare native playback).
 
-- A device of the source's service that cannot play a given media natively answers the request with an error (C.3): the core does not model per-device exceptions to `native`.
-- One speaker exposed by two integrations (a Sonos speaker seen by the Sonos service and as a Spotify Connect device) is two music devices; the speaker picker shows both, each with what it can play.
+- Everything is per device: a Plex integration declares native playback on the clients it can drive and not on the others, a Home Assistant bridge declares URL playback on the speakers that accept URLs and not on its Spotify entities.
+- One speaker exposed by two integrations (a Sonos speaker seen by the Sonos service and as a Spotify Connect device) is two players; the speaker picker shows both, each with what it can play.
+- The rule is computed by the core only: the API returns `compatible` and `reason` (C.4) and the front never re-implements it.
 
 When only a **room** (or nothing) is given — AI and scenes —, `gladys.music.choosePlayer({ uri, room?, user? })`:
 
-1. candidates = players compatible with the media (above); if a room is given, those in that room;
+1. candidates = reachable media players compatible with the media (above); if a room is given, those in that room;
 2. none → `MUSIC_NO_COMPATIBLE_PLAYER` (the AI explains which players exist and why they do not fit);
 3. one → it;
-4. several → the one currently `PLAYING` (the user means "this speaker"), then the one whose now playing record changed most recently (E), then **ambiguous**: the AI asks back with the list, the scene editor never gets there (a scene always names a device).
+4. several → the one currently `PLAYING` (the user means "this speaker"; its owner is reachable, so its `playback_state` is current), then the one whose now playing record changed most recently (E), then **ambiguous**: the AI asks back with the list, the scene editor never gets there (a scene always names a device).
 
 ### C.3 What a player receives
 
@@ -409,7 +413,7 @@ When only a **room** (or nothing) is given — AI and scenes —, `gladys.music.
   "uri": "ext-navidrome://album/al-42",
   "route": "stream",
   "enqueue": "replace",
-  "item": { "type": "album", "title": "\"Heroes\"", "subtitle": "David Bowie · 1977", "image": "cover-al-42" },
+  "media": { "type": "album", "title": "\"Heroes\"", "subtitle": "David Bowie · 1977", "image": "cover-al-42" },
   "items": [
     { "url": "http://…", "mime_type": "audio/flac", "title": "Beauty and the Beast", "artist": "David Bowie",
       "album": "\"Heroes\"", "duration": 216, "image": "cover-al-42", "uri": "ext-navidrome://track/tr-1" }
@@ -417,12 +421,12 @@ When only a **room** (or nothing) is given — AI and scenes —, `gladys.music.
 }
 ```
 
-- `route: "native"` carries no `items`: the player's own service knows what its URI means.
-- `item` is the `MediaItem` the user picked when the caller has it (widget, AI), else built from the first resolved item.
+- `media` — what the user picked, for the player's own display: `type`, `title`, `subtitle`, `image` of the `MediaItem` (B.2) when the caller has it (widget, AI), else built from the first resolved item. Its URI is the top-level `uri`.
+- `items` — the `PlayableItem`s in play order (B.2), each with its own `uri`; absent on the native route, where the player's own service knows what `uri` means. At most 500 items on internal and WebSocket transports, 100 on MQTT; the core truncates, and the answer's `items_count` says what was sent.
 - `image` keys are the source's (B.5); a player echoes them in its now playing record (E.7) and keeps no bytes.
 - The record evolves by adding optional fields only; players ignore the fields they do not know.
 
-**Enqueue belongs to every player's contract.** A player that plays an album has a queue — its own (Sonos, Cast, MPD, LinkPlay, LMS) or the one its integration keeps to feed the items one by one (AirPlay, a DLNA renderer without `SetNextAVTransportURI`). Inserting after the current item (`next`) or appending (`add`) is therefore always possible. A player whose protocol truly cannot (a cloud-driven speaker) answers with an error, shown by the widget and spoken by the AI — no capability flag announces it in advance.
+**Queueing is declared.** `enqueue` is `next` or `add` only for a player that declares `GLADYS_MUSIC_ENQUEUE` (C.1 refuses otherwise). Playing an album with `replace` needs no declaration, but it needs someone to chain the items: the speaker (Sonos, Cast, MPD, LinkPlay, LMS queues; `SetNextAVTransportURI` on many DLNA renderers) or, when it has no queue, the integration — the protocol's job, which the core does not take over (Alternatives). An integration that keeps such a list can honour `next` and `add` and declares the param; one that cannot (Spotify's Web API queues one track at a time) does not.
 
 **Transports** — one per kind of integration, the mirror of the now playing transports (E.4):
 
@@ -436,23 +440,25 @@ When only a **room** (or nothing) is given — AI and scenes —, `gladys.music.
 - `external-integration.device.set-value` is untouched (no `options` field). An integration that does not know `music.play` ignores it (existing protocol rule) and the core reports a timeout.
 - Sonos: `route: stream` → `RemoveAllTracksFromQueue` (`replace`) or `AddURIToQueue` (`EnqueuedAsNext` for `next`), then `Play`. `route: native` does not occur (Sonos is not a source in v1).
 
-A player MUST acknowledge once playback has been **accepted** by the speaker (queue loaded), not when the track ends: an album longer than the timeout is never an error. Failure → `success: false` with a human-readable `error`.
+A player MUST acknowledge once playback of the **first item** has been accepted by the speaker; it loads the rest of the queue afterwards (500 `AddURIToQueue` calls do not fit in any timeout). Failure → `success: false` with a human-readable `error`.
+
+The MQTT play request is published with QoS 1 through a new publish path that never logs the payload — today `publish()` logs every message at `debug`, stream tokens included (G.3).
 
 ### C.4 HTTP API
 
-All routes are user-authenticated (standard API auth, any role — see open question 4).
+All routes are user-authenticated (standard API auth, any role — see open question 3).
 
 | Route | Body / query | Answer |
 |---|---|---|
-| `GET /api/v1/music/source` | — | `[{ source, name, media_types, streamable, native, status }]`; `status` = `ok` / `not_connected` (external integration down) |
-| `GET /api/v1/music/search` | `query`, `types` (csv), `source` (csv, default all), `limit`, `offset` | `{ sources: [{ source, name, status: 'ok' \| 'timeout' \| 'error', error?, items, has_more }] }` — fan-out in parallel, 8 s per source, a slow source never blocks the others' results |
-| `GET /api/v1/music/player` | `uri` (optional), `room` (optional) | music devices with `{ device_selector, name, room, play_media, native_sources, playback_state, now_playing, compatible?, reason? }` (`play_media`: has the feature; `native_sources`: keys of the sources that play natively on it); with `uri`, each says whether it can play it (the speaker picker of H.3) |
+| `GET /api/v1/music/source` | — | `[{ source, name, media_types, streamable, native_players, status }]`; `native_players` = how many devices of its service declare native playback (a `streamable: false` source with none plays nowhere); `status` = `ok` / `not_connected` (external integration down) |
+| `GET /api/v1/music/search` | `query`, `types` (csv), `source` (csv, default all), `limit`, `offset`, `player` (optional device selector) | `{ sources: [{ source, name, status: 'ok' \| 'timeout' \| 'error', error?, items, has_more }] }` — fan-out in parallel, 8 s per source, a slow source never blocks the others' results; with `player`, each item carries `compatible` and `reason` (C.2) |
+| `GET /api/v1/music/player` | `uri` (optional), `room` (optional) | players with `{ device_selector, name, room, reachable, url_playback, native_source, enqueue, playback_state, now_playing, compatible?, reason? }` (`native_source`: the key of its service's source when it declares native playback, else `null`); with `uri`, each says whether it can play it (the speaker picker of H.3) |
 | `GET /api/v1/music/player/:device_selector` | — | the same object for one device — what the widget loads (H.1) |
 | `POST /api/v1/music/play` | `{ device_selector, uri, enqueue?, volume? }` | C.1; `202` once the player acknowledged |
 | `GET /api/v1/music/source/:source/image/:image_key` | — | B.5 |
 | `GET /api/v1/music/player/:device_selector/image/:image_key` | — | B.5 |
 
-**No generic value route.** `play-media` is not written through `POST /api/v1/device_feature/:selector/value` or the `device.set-value` scene action (A.3): generic clients (Node-RED, HTTP scripts) use `POST /api/v1/music/play`, scenes use the `music.play` action (H.4). One entry point, one validation.
+**One entry point.** There is no feature to write: generic clients (Node-RED, HTTP scripts) use `POST /api/v1/music/play`, scenes use the `music.play` action (H.4).
 
 ### C.5 Fixture — a player device (external WiiM integration)
 
@@ -475,13 +481,15 @@ All routes are user-authenticated (standard API auth, any role — see open ques
       "type": "playback_state", "min": 0, "max": 3, "read_only": true, "has_feedback": false, "keep_history": false },
     { "name": "Notification", "external_id": "ext:wiim:a1b2c3:play-notification", "category": "music",
       "type": "play_notification", "min": 1, "max": 1, "read_only": false, "has_feedback": false, "keep_history": false },
-    { "name": "Play media", "external_id": "ext:wiim:a1b2c3:play-media", "category": "music", "type": "play-media",
-      "read_only": false, "has_feedback": false, "keep_history": false }
+  ],
+  "params": [
+    { "name": "GLADYS_MUSIC_URL_PLAYBACK", "value": "true" },
+    { "name": "GLADYS_MUSIC_ENQUEUE", "value": "true" }
   ]
 }
 ```
 
-`play-media` without options: the WiiM plays media by URL. What it plays is not a feature: the integration publishes it with `publishNowPlaying` (E.4).
+The features are today's; the two params make the WiiM a media player that plays by URL and queues (A.3). What it plays is not a feature: the integration publishes it with `publishNowPlaying` (E.4).
 
 ### C.6 Fixture — search
 
@@ -529,7 +537,7 @@ What the WiiM integration receives over WebSocket:
       "uri": "ext-navidrome://album/al-42",
       "route": "stream",
       "enqueue": "replace",
-      "item": { "type": "album", "title": "\"Heroes\"", "subtitle": "David Bowie · 1977", "image": "cover-al-42" },
+      "media": { "type": "album", "title": "\"Heroes\"", "subtitle": "David Bowie · 1977", "image": "cover-al-42" },
       "items": [
         { "url": "http://192.168.1.20:4533/rest/stream?id=tr-1&…", "mime_type": "audio/flac",
           "title": "Beauty and the Beast", "artist": "David Bowie", "album": "\"Heroes\"",
@@ -542,11 +550,11 @@ What the WiiM integration receives over WebSocket:
 
 What an MQTT player receives for the same request: topic `gladys/device/mqtt:kitchen-esp32/music/play`, payload = the `request` object above.
 
-## D. `play-media` vs `play_notification` (Q3)
+## D. Playing a media vs `play_notification` (Q3)
 
 **Decision: two features, two semantics. `play_notification` is not extended.**
 
-| | `play_notification` (existing) | `play-media` (new) |
+| | `play_notification` (existing) | Play request (new) |
 |---|---|---|
 | Purpose | a short sound that **interrupts** (TTS, doorbell, alarm chime) | a media that **replaces** (or joins) what plays |
 | Transport | `setValue` with one audio URL — a value | the play request record on the music transports (C.3) |
@@ -559,7 +567,7 @@ Merging them (Home Assistant's `play_media(…, announce: true)`) would make eve
 
 **The resume contract, made explicit** (it was implicit until now):
 
-- A player that has both features SHOULD restore after a notification what `play-media` was playing: same queue, same item, position within a few seconds, same volume, same paused/playing state. Sonos does it through `PlayNotification`. Google Cast currently does **not** (launching the default receiver kills the running app): phase 2 of this spec makes the Cast service snapshot its media session (queue, current item, position) before the notification and reload it afterwards when the session was Gladys' own; a session owned by another app (YouTube, Spotify) is not restorable and is documented as such.
+- A media player that also has `play_notification` SHOULD restore after a notification what it was playing: same queue, same item, position within a few seconds, same volume, same paused/playing state. Sonos does it through `PlayNotification`. Google Cast currently does **not** (launching the default receiver kills the running app): phase 2 of this spec makes the Cast service snapshot its media session (queue, current item, position) before the notification and reload it afterwards when the session was Gladys' own; a session owned by another app (YouTube, Spotify) is not restorable and is documented as such.
 - A notification sent while `playback_state` is `PAUSED`/`STOPPED` leaves the player in that state afterwards.
 - A play request received while a notification plays cancels the pending resume: the newest explicit request wins.
 - **A notification never changes the now playing record.** The core does not write it when it sends a notification, and a player does not publish the notification as its now playing (E.6): the record keeps describing the media the notification interrupted.
@@ -583,21 +591,24 @@ It also broke rule 5 of `device-feature-categories.md` (one atomic value per fea
 ### E.2 The entry point
 
 ```js
-await gladys.music.setNowPlaying(device, nowPlaying); // nowPlaying: object | null
+await gladys.music.setNowPlaying(device, nowPlaying, { serviceId }); // nowPlaying: object | null
 gladys.music.getNowPlaying(device); // object | null
 ```
 
-Every rule lives here, once:
+The maintainer's signature, plus the caller's service so that every rule lives here, once:
 
-1. **Music devices only** (A.1): a device with at least one `music` feature, else `BadParameters`. A player does not need `play-media` to report what it plays.
-2. **Ownership**, checked by each transport before the call: an external integration publishes for its own devices only (`404` otherwise, like `POST /camera/image`), the MQTT handler for `mqtt` devices only, an internal service for its own.
+1. **Players only** (A.1): the device has a `music` / `playback_state` feature, else `BadParameters`.
+2. **Ownership**: `device.service_id` equals the caller's `serviceId` (the internal service, `mqtt`, or the external integration's service), else `NotFoundError` — a `404` on the host API, like `POST /camera/image`.
 3. **`null` means nothing is loaded.**
-4. **Strict schema** (Joi, E.3, `convert: false`, unknown keys refused). A violation is a `BadParameters` returned to the caller with the path and the rule — `now_playing.position: must be less than or equal to ref:duration` — never a warning in a log.
-5. **`position_updated_at` is set by the core** to the reception time when the record has a `position` and no `position_updated_at`.
-6. **Nothing changed, nothing sent**: a record deep-equal to the stored one emits no event, so the replay of E.5 does not make the widget blink.
-7. **A notification does not touch it**: the core never calls `setNowPlaying` when it plays a notification (D, E.6).
+4. **Strict schema** (Joi, E.3, unknown keys refused). A violation is a `BadParameters` returned to the caller with the path and the rule — `now_playing.position: must be less than or equal to ref:duration` — never a warning in a log.
+5. **The core owns the clock.** `position_updated_at` is set to the reception time when the record has a `position` without it. It is accepted from callers that share the core's clock — internal services, and external integrations, which are containers on the same host (the SDK stamps it, E.4) — and refused from MQTT, whose bridges run on other machines (an ESP32 without NTP). A retained MQTT delivery loses its `position`: its age is unknown.
+6. **The record follows the transport state.** The music module listens to the state event the core already emits for every saved state (`EVENTS.TRIGGERS.CHECK`, which carries `previous_value`) on `playback_state`, and re-anchors the record of that device: leaving `PLAYING`, `position` advances by the elapsed time (bounded by `duration`) and `position_updated_at` becomes now; entering `PLAYING`, `position_updated_at` becomes now. The event of E.2 is then emitted. Whatever arrives first — the new `playback_state` on `POST /state` (not awaited) or the player's new record — the record never extrapolates across a pause.
+7. **Nothing changed, nothing sent.** A record whose fields other than the position are unchanged, and whose position agrees within 2 s with the stored one extrapolated to now, changes nothing and emits nothing: the SDK replay and MQTT redeliveries do not make the widget blink.
+8. **A notification does not touch it**: the core never calls `setNowPlaying` when it plays a notification (D, E.6).
 
 On change the core emits the WebSocket event **`music.now-playing-updated`** `{ device: <device selector>, now_playing }` to all users (`<domain>.<kebab-event>`, like `thermostat.config-updated`; forwarded through Gladys Plus like every event).
+
+**Displayed position** (normative, front and AI alike): while `playback_state` is `PLAYING`, `position + (now − position_updated_at)`, bounded to `[0, duration]`; otherwise `position`. No position is shown for a record without `duration` (a live stream: `LIVE` badge, H.1).
 
 ### E.3 The record
 
@@ -621,11 +632,11 @@ On change the core emits the WebSocket event **`music.now-playing-updated`** `{ 
 | `title` | **required**, string 1–200. Nothing to name → publish `null` |
 | `artist`, `album` | optional, string ≤ 200 |
 | `image` | optional, image key `^[a-z0-9][a-z0-9-]{0,63}$`, owned by the URI's source, or by the player's service when there is no `uri` (E.7) |
-| `duration` | optional, seconds, > 0; absent for a live stream |
-| `position` | optional, seconds, ≥ 0, ≤ `duration` when `duration` is present |
-| `position_updated_at` | optional ISO 8601 date, at most 5 s in the future, only with `position`; set by the core when `position` comes without it |
+| `duration` | optional, seconds (a number, decimals allowed), > 0; absent for a live stream |
+| `position` | optional, seconds, ≥ 0; ≤ `duration` only when `duration` is present (`Joi.when('duration', …)`: a bare `max(Joi.ref('duration'))` would refuse every live stream with a position) |
+| `position_updated_at` | optional, only with `position`: an ISO 8601 date-time **with an offset** (`2026-10-15T18:42:07.120Z`; a `Joi.string().isoDate()` plus an offset check — with `convert: false`, `Joi.date()` refuses every string), at most 5 s in the future; refused from MQTT; set by the core when absent (E.2) |
 | `uri` | optional, a **source** media URI (A.4), never an `http(s)` URL (it may carry stream tokens, G.3). Present when the player knows which media it plays: Gladys started it, or it is native content of the player's own source |
-| `queue_index`, `queue_length` | optional integers, `0 ≤ queue_index < queue_length` |
+| `queue_index`, `queue_length` | optional integers, both or neither, `0 ≤ queue_index < queue_length` |
 
 - **No `state`**: `playback_state` is the only transport state, with `STOPPED` and `BUFFERING` added (A.2). Scenes keep triggering on it.
 - **No `source`, no `type`**: they are the first two segments of `uri` — the same "one source of truth" rule.
@@ -636,19 +647,27 @@ On change the core emits the WebSocket event **`music.now-playing-updated`** `{ 
 
 | From | In | On error |
 |---|---|---|
-| Internal service | `await gladys.music.setNowPlaying(device, record)` | the thrown `BadParameters` |
+| Internal service | `await gladys.music.setNowPlaying(device, record, { serviceId })` | the thrown `BadParameters` / `NotFoundError` |
 | External integration | `POST /api/integration/v1/music/now_playing` `{ device_external_id, now_playing }` → `200 { success: true }`, **awaited** (unlike `POST /state`). SDK: `await gladys.publishNowPlaying(deviceExternalId, record \| null)` | `400 BAD_REQUEST` naming the path and the rule; `404` if the device is not the integration's; `429` beyond 60 records/min per device, a counter of its own outside `POST /state` |
-| MQTT | `gladys/master/device/{device_external_id}/music/now_playing`, payload = the record as JSON, or `null` (or an empty payload) for nothing, published **retained** | logged at `warn` with the rule, and published on `gladys/device/{device_external_id}/music/now_playing/error` (payload = the message), so a bridge author can subscribe to their errors |
+| MQTT | `gladys/master/device/{device_external_id}/music/now_playing`, payload = the record as JSON, published **retained**; an **empty payload** means nothing (it also deletes the retained message), `null` is accepted too | logged at `warn` with the rule, and published on `gladys/device/{device_external_id}/music/now_playing/error` (payload = the message), so a bridge author can subscribe to their errors |
 
 Out: the `music.now-playing-updated` event (E.2), `GET /api/v1/music/player[/:device_selector]` (C.4) and the AI's `device.get-state` (H.5). The record is never part of the device object (`GET /api/v1/device`): it is not a feature state.
 
-The shape mirrors `POST /api/integration/v1/camera/image` → `gladys.device.camera.setImage` (Precedents): `device_external_id` + payload, ownership `404`, a rate limit of its own. The MQTT handler (`handleGladysMessage`) routes `gladys/master/device/:id/music/…` before its feature branch — today such a topic would be parsed as a numeric state of a feature named `now_playing` and dropped, so an older core ignores it harmlessly.
+The shape mirrors `POST /api/integration/v1/camera/image` → `gladys.device.camera.setImage` (Precedents): `device_external_id` + payload, ownership `404`, a rate limit of its own.
+
+**MQTT details.**
+- The handler (`handleGladysMessage`) routes `gladys/master/device/:id/music/…` before its feature branch. Today such a topic would be parsed as a numeric state of a feature named `now_playing` and dropped, so an older core ignores it harmlessly.
+- The client's `message` callback passes the `retain` flag through (today `connect.js` passes `message.toString()` only), so that a retained delivery loses its `position` (E.2).
+- A retained record published before its device existed was delivered and dropped: when an MQTT device is created, the core subscribes again to its `…/music/now_playing` topic to read it.
+- A bridge SHOULD set a Last Will that publishes an empty retained payload on its `…/music/now_playing` topics, so that a dead bridge clears its records (E.5).
+- Strictness has a cost on MQTT: a bridge has no `gladys_version` range, so one that sends a field added in a later Gladys is refused by an older core — and says so on the error topic.
 
 **SDK — `publishNowPlaying(deviceExternalId, record)`:**
 
 - stamps `position_updated_at` itself when the record has a `position` without it: the integration knows when it read the position, and a replay must not move it backwards;
 - sends records only for devices created in Gladys (it knows them from `GET /device` and `device-created`) and holds the others until their device is created — an integration publishes for every device it discovers;
-- keeps the last record **accepted** for each device and **replays them after every re-authentication**, before emitting `connected`: every external integration gets the restart behavior of E.5 without a line of code. A record refused with `400` is not kept;
+- keeps the **last record published** for each device — accepted, or not sent because Gladys was unreachable — and drops it on a `400` or a `404` and on `device-deleted` (next to `_forgetDeviceStates`); publications are serialized per device (the `publishChangedStatesQueue` pattern), so an older record never overtakes a newer one;
+- **replays them after every re-authentication**, before emitting `connected`: every external integration gets the restart behavior of E.5 without a line of code. A replay error is logged and never blocks `connected`;
 - throws `GladysApiError` on `400`, `404` and `429`, like the other publishers.
 
 ### E.5 Memory only: restarts and other lifecycle events
@@ -662,17 +681,20 @@ No table, no migration, no `last_value_string`. The data is volatile by nature: 
 | External integrations | the SDK replays the last record of each device at reconnection (E.4) |
 | MQTT | the broker re-delivers the retained message when the core subscribes |
 
-The record is cleared (event with `null`) when:
+**A player is reachable** when its owner can talk to it: the internal service is running, the external integration is connected, the MQTT broker is connected. The record of an unreachable player is cleared (event with `null`), and one helper does it on every path that ends reachability:
 
-- the device is destroyed;
-- the internal service owning the device stops;
-- the external integration's WebSocket closes — the moment the core marks it `DEGRADED`. A widget must not show a track for a player nobody can reach; the replay restores the record at reconnection.
+- **the device is destroyed** — a call in `device.destroy`, which emits no deletion event today;
+- **the internal service stops**;
+- **the external integration is no longer connected**, whatever the reason: WebSocket closed (`integrationDisconnected`), integration stopped (`stop`) or uninstalled (`uninstall`) — the helper is called wherever `connections.delete(service.id)` is, since a user stop or an uninstall never goes through `DEGRADED`;
+- **the core loses the MQTT broker** (all `mqtt` records; the retained messages restore them at reconnection), and **an MQTT bridge dies** (its Last Will clears its records, E.4).
+
+`playback_state` is a persisted feature and keeps its last value — scenes and history rely on it. The music surfaces do not trust it for an unreachable player: such a player is never a `choosePlayer` or `music_control` candidate (C.2, H.5), and the widget shows it as unreachable whatever its `playback_state` says (H.1). The SDK replay and the transports of the table above restore the record when the player is reachable again.
 
 The precedent is the external integrations' connection status, "kept in memory only (lost at restart, republished by the integration)" (Precedents).
 
 ### E.6 What a player must do
 
-- **Publish on changes only**: track change, seek, pause, resume, stop — never every second. On pause and on resume, republish with the current `position`: the front extrapolates the position only while `playback_state` is `PLAYING`, from the last `position` and `position_updated_at`.
+- **Publish on changes only**: track change, seek, stop — never every second. Pause and resume are re-anchored by the core from `playback_state` (E.2); a player that knows the exact position SHOULD still republish then, which corrects the estimate.
 - **Never publish a notification as the now playing.** The core sees a notification start, not end; only the player knows when the previous media is back. A player whose protocol reports the notification as a track (Sonos `AVTransport` events during `PlayNotification`) filters it out until the previous media is restored.
 - Set `uri` only for a media a source can name, and `image` according to E.7.
 - Publish `null` when nothing is loaded anymore (queue cleared, input switched to a TV with no metadata).
@@ -682,10 +704,11 @@ The precedent is the external integrations' connection status, "kept in memory o
 - **With a `uri`**: `image` is a key of the URI's **source**, served by `GET /api/v1/music/source/:source/image/:key` (B.5). A player relaying a source item echoes the `image` of the `PlayableItem` it received (C.3): it keeps no bytes and implements no image handler — an MQTT player gets artwork too.
 - **Without a `uri`** (content started elsewhere): `image` is a key of the **player's own service**, served by `GET /api/v1/music/player/:device_selector/image/:key`.
 - The front picks the route from the presence of `uri`. This settles revision 1's open question 9.
+- A relayed record keeps its `uri` only while the relaying integration remembers which item it plays (the Sonos service maps stream URLs back to the items it was sent, in memory). After a restart of Gladys or of that integration, the record comes back without `uri`, with the speaker's own metadata and artwork: still right, less rich.
 
 ### E.8 Evolution and limits
 
-- **Versioning.** The record evolves by **adding optional fields** only. The core is strict on what it receives; the front and the AI ignore what they do not know. A field added in Gladys X.Y is refused by an older core, so an integration that sends it raises the `gladys_version` range of its manifest — the store already marks an integration incompatible with an older Gladys and disables its installation.
+- **Versioning.** The record evolves by **adding optional fields** only. The core is strict on what it receives; the front and the AI ignore what they do not know. A field added in Gladys X.Y is refused by an older core, so an integration that sends it raises the `gladys_version` range of its manifest — the store already marks an integration incompatible with an older Gladys and disables its installation. MQTT bridges have no such range (E.4).
 - **No history** of what played: a listening history would be a separate feature.
 - **Scenes** trigger on `playback_state`, as today. A `music.track-changed` trigger with typed fields (title, artist, source) can be built later on the record (phase 3); it compares fields, never a JSON string.
 
@@ -724,46 +747,48 @@ What the frontend receives:
 
 ### F.1 What changes in the core
 
-- `server/utils/constants.js`: `PLAY_MEDIA` in `DEVICE_FEATURE_TYPES.MUSIC` (with the inline scope comment rule 8 requires), `MUSIC_PLAYBACK_STATE` extended, `MUSIC_ENQUEUE`, `MUSIC_MEDIA_TYPES`, `ACTIONS.MUSIC.PLAY`, `AI_CHAT_TOOL_CATEGORIES.MUSIC`, WebSocket types `music.now-playing-updated` and `external-integration.music.{search,resolve,get-image,play}`.
-- `server/lib/music/` (new): source registry, `search`, `play`, `choosePlayer`, the now playing store (`setNowPlaying`, `getNowPlaying`, clearing hooks), the Joi schemas of the records, image cache, normalizers.
-- `server/lib/device/device.setValue.js`: refuses a `play-media` feature (A.3) — a guard, no new path.
-- `server/utils/normalizeSupportedOptions.js`: refuses options on `play-media`.
-- `server/lib/scene/scene.actions.js`: new `music.play` action (H.4). `device.set-value` is unchanged.
-- `server/lib/external-integration/`: `music_source` manifest field; `music.*` messages on the proxy service; `POST /api/integration/v1/music/now_playing`; clearing of the integration's records when its WebSocket closes.
-- `server/services/mqtt/`: route `gladys/master/device/:id/music/now_playing` in `handleGladysMessage`; publish the play request on `gladys/device/:id/music/play`.
-- `server/services/mcp/`: music tools, `device.get-state` for music devices (H.5).
-- **Unchanged:** `device.newStateEvent`, `device.saveStringState`, the `external-integration.device.set-value` message, the MQTT state topics, `POST /state`.
+- `server/utils/constants.js`: `MUSIC_PLAYBACK_STATE` extended, `MUSIC_ENQUEUE`, `MUSIC_MEDIA_TYPES`, the `GLADYS_MUSIC_*` param names, `ACTIONS.MUSIC.PLAY`, `AI_CHAT_TOOL_CATEGORIES.MUSIC`, WebSocket types `music.now-playing-updated` and `external-integration.music.{search,resolve,get-image,play}`. No new feature type.
+- `server/lib/music/` (new): source registry, `search`, `play`, `choosePlayer`, compatibility, the now playing store (`setNowPlaying`, `getNowPlaying`, the re-anchoring listener on `playback_state`, the clearing helper), the Joi schemas of the records, image cache, normalizers.
+- Reserved params: the `GLADYS_MUSIC_*` keys join the external-integration allowlist of the `GLADYS_*` namespace, and `device.create` / `device.setParam` validate them for every other caller (A.3).
+- Clearing hooks (E.5): `device.destroy`; internal service stop; every `connections.delete(service.id)` of `server/lib/external-integration/` (`integrationDisconnected`, `stop`, `uninstall`); MQTT broker disconnection.
+- `server/lib/scene/scene.actions.js`: new `music.play` action (H.4).
+- `server/lib/external-integration/`: `music_source` manifest field; `music.*` messages on the proxy service; `POST /api/integration/v1/music/now_playing`.
+- `server/services/mqtt/`: route `gladys/master/device/:id/music/now_playing` in `handleGladysMessage`, with the `retain` flag passed through from `connect.js`; subscribe again to that topic when an MQTT device is created; publish the play request on `gladys/device/:id/music/play` with QoS 1, through a path that does not log the payload; the refusal topic.
+- `server/services/mcp/`: music tools, `device.get-state` for players (H.5).
+- Front: `EditMusicBox` lists players (`playback_state`) instead of devices with `play`; `MigrateDeviceModal` warns when the source device is the target of `music.play` actions and the destination is not a media player (`device.migrate` rewrites the action's `device` unconditionally, as for `play_notification`).
+- Specs in the same diff: `docs/specs/external-integrations/` — `contracts/host-api-endpoints.md` (the endpoint, the params), `contracts/websocket-protocol.md` (the messages), `contracts/js-sdk-api.md` (the handlers, `publishNowPlaying`), `contracts/manifest.md` and a new `capabilities/music-source.md`.
+- **Unchanged:** `device.setValue`, `device.newStateEvent`, `device.saveStringState`, `normalizeSupportedOptions`, the `external-integration.device.set-value` message, the MQTT state topics, `POST /state`, the feature pickers.
 
 ### F.2 Internal players
 
 | Service | Phase | Change |
 |---|---|---|
-| `sonos` | 1 | `play-media` feature; `service.music.play`: `RemoveAllTracksFromQueue` (`replace`) or `AddURIToQueue` (`EnqueuedAsNext` for `next`), then `Play`. Now playing from the `AVTransport` event's `CurrentTrackMetaData` it already receives (`Title`, `Artist`, `Album`, `Duration`), the position from `GetPositionInfo` on each transport change and at start (E.5); for a media Gladys started, the service maps the stream URL of the current track back to the `PlayableItem` it sent (its `uri` and source `image`), otherwise `AlbumArtUri` → a player image key `art-<hash>` served by its `getImage`. `playback_state` gains `STOPPED`/`BUFFERING` from `TransportState`. Filters the notification track out of the now playing (E.6). Nothing removed |
-| `google-cast` | 1 | **Keeps one connection per device** (new: today a client is created per notification) to read the media status — needed for the now playing at start (E.5) and for the transport features; `play-media` feature, `service.music.play` through the default receiver's `queueLoad`/`queueInsert`; `play`/`pause`/`next`/`previous`/`volume`/`playback_state` (the Nest Mini finally appears in the Music widget); phase 2: resume after notification (D) |
-| `airplay` | 3 | `play-media` feature; `service.music.play` plays the items one by one through its ffmpeg pipeline, without the 5-minute notification cap, and keeps the queue itself (C.3); `pause` (stops the pipeline); now playing from what it sends. AirPlay has no queue of its own and no remote metadata to read |
+| `sonos` | 1 | Params `GLADYS_MUSIC_URL_PLAYBACK` and `GLADYS_MUSIC_ENQUEUE`; `service.music.play`: `RemoveAllTracksFromQueue` (`replace`) or `AddURIToQueue` (`EnqueuedAsNext` for `next`), then `Play`, acknowledged on the first item. Now playing from the `AVTransport` event's `CurrentTrackMetaData` it already receives (`Title`, `Artist`, `Album`, `Duration`), the position from `GetPositionInfo` on each track change and at start (E.5); for a media Gladys started, the service maps the stream URL of the current track back to the `PlayableItem` it sent (its `uri` and source `image`), otherwise `AlbumArtUri` → a player image key `art-<hash>` served by its `getImage`. `playback_state` gains `STOPPED`/`BUFFERING` from `TransportState`. Filters the notification track out of the now playing (E.6). Nothing removed |
+| `google-cast` | 1 | **Keeps one connection per device** (new: today a client is created per notification) to read the media status — needed for the now playing at start (E.5) and for the transport features; params URL playback and enqueue; `service.music.play` through the default receiver's `queueLoad`/`queueInsert`; `play`/`pause`/`next`/`previous`/`volume`/`playback_state` (the Nest Mini becomes a player and appears in the Music widget); phase 2: resume after notification (D) |
+| `airplay` | 3 | Params URL playback and enqueue; `service.music.play` plays the items one by one through its ffmpeg pipeline, without the 5-minute notification cap, and keeps the list itself (C.3); `playback_state`, `pause` (stops the pipeline); now playing from what it sends. AirPlay has no queue of its own and no remote metadata to read |
 
-Existing devices gain the new feature **on the next scan**: `device.create` matches existing features by `external_id` (`server/lib/device/device.create.js`), so a re-created Sonos device keeps its features, selectors and the scenes that use them, and gets `play-media`. No `device.migrate` entry: no feature is renamed or removed, and no dashboard box field references a new feature (the Music box references a device).
+**Existing devices are upgraded at service start.** The Sonos, Google Cast and AirPlay discovery tabs mark a known `external_id` as "already created" and never post it again (`front/src/routes/integration/all/sonos/discover-page/DiscoverTab.jsx`), so "on the next scan" would never happen. At start, each of these services walks its created devices and, by `external_id`: adds the missing features (`device.addFeature` — the Cast transport features), raises the `playback_state` `max` to 3 (`device.updateFeature`), and sets the `GLADYS_MUSIC_*` params (`device.setParam`). Selectors, rooms and the scenes using them are kept; the upgrade is idempotent and tested. No `device.migrate` entry: nothing is renamed or removed, and no dashboard box field references a new feature (the Music box references a device).
 
 ### F.3 MQTT
 
-- Generic devices can declare `play-media` in the MQTT setup UI (catalog entry from the i18n key): no option editor, no min/max; the catalog preview explains that requests arrive on `gladys/device/{device_external_id}/music/play`.
+- The MQTT setup UI shows a **Music player** block on a device that has a `playback_state` feature: three checkboxes (plays by URL, plays its own catalog — never true for MQTT, so hidden —, queues) written as the `GLADYS_MUSIC_*` params, and the two topics below in its help text.
 - Outbound: the play request on `gladys/device/{device_external_id}/music/play` (C.3). The state topics are unchanged.
-- Inbound: the now playing record on `gladys/master/device/{device_external_id}/music/now_playing`, retained; refusals on `gladys/device/{device_external_id}/music/now_playing/error` (E.4). The MQTT device page documents both topics.
+- Inbound: the now playing record on `gladys/master/device/{device_external_id}/music/now_playing`, retained, with a Last Will clearing it; refusals on `gladys/device/{device_external_id}/music/now_playing/error` (E.4).
 - The play request carries stream URLs, tokens included: publishing them on a broker is the MQTT user's trust boundary (G.3).
 
 ### F.4 External integrations
 
-- **Existing integrations keep working**: `music_source` is optional, every new message is one an old SDK ignores, no message changes shape.
-- **To become a player by URL:** publish a `play-media` feature and implement `onMusicPlay(device, request)`.
-- **To report what plays** (any music device): call `publishNowPlaying(deviceExternalId, record | null)` on changes (E.6); implement `onMusicGetImage` only for content without `uri` (E.7).
-- **To become a source:** declare `music_source`, implement `onMusicSearch`, `onMusicResolve` (if `streamable`), `onMusicGetImage`; with `native: true`, implement `onMusicPlay` for its own devices (`route: "native"`).
+- **Existing integrations keep working**: `music_source` and the params are optional, every new message is one an old SDK ignores, no message changes shape.
+- **To become a media player:** publish a `playback_state` feature and the `GLADYS_MUSIC_*` params that are true for the device (A.3), and implement `onMusicPlay(device, request)`.
+- **To report what plays** (any player): call `publishNowPlaying(deviceExternalId, record | null)` on changes (E.6); implement `onMusicGetImage` only for content without `uri` (E.7).
+- **To become a source:** declare `music_source`, implement `onMusicSearch`, `onMusicResolve` (if `streamable`), `onMusicGetImage`; for its own devices that declare native playback, `onMusicPlay` receives `route: "native"`.
 - SDK (`@gladysassistant/integration-sdk`): `onMusicSearch`, `onMusicResolve`, `onMusicGetImage`, `onMusicPlay`, `publishNowPlaying` (with the stamping, holding and replay of E.4), typings, `gladys.fake.music*` triggers in `lib/testing.js`, a dev-mode validator for the records it receives and sends.
 - Credentials (Navidrome password, Spotify OAuth) stay in the integration's `config_schema` (`secret`, `oauth2`) — the core never sees them (G.3).
 
 ### F.5 Backward compatibility
 
-- No type, value, route, message or event changes meaning. `MUSIC_PLAYBACK_STATE` is extended append-only; a scene condition `playback_state = 0` still means paused.
-- A music device with no now playing record and no `play-media` looks exactly as today in the widget and in scenes; the widget hides the search and artwork areas for it.
+- No type, value, route, message or event changes meaning. `MUSIC_PLAYBACK_STATE` is extended append-only: a condition `playback_state = 0` still means paused, but a scene using `> 0` as "playing" now also matches `STOPPED` and `BUFFERING` — the release notes say so, and the editor's labels name the states.
+- A player with no now playing record that is not a media player looks exactly as today in the widget and in scenes; the widget hides the search and artwork areas for it.
 - Existing `music` boxes (`{ type: 'music', device }`) render with the new defaults (H.1) without a dashboard migration.
 - `play_notification` gains nothing mandatory; the resume behavior (D) is a SHOULD.
 - Out of scope, noted on the way: `external-integration.device.set-value` drops `setValue`'s `options`, so an external speaker never receives the notification volume today. Revision 1 fixed it as a side effect of its `options` field; it is now a separate fix.
@@ -774,7 +799,7 @@ Existing devices gain the new feature **on the next scan**: `device.create` matc
 
 - The core **never fetches** a media or stream URL: it hands URLs to players. The only bytes it fetches are images, and only through the owning service by key (B.5) — the widget-image doctrine, so no SSRF from the core.
 - A direct `http(s)` URI makes **the speaker** fetch it. Speakers already fetch arbitrary URLs through `play_notification`; the risk is a LAN device requesting a LAN URL, with an audio decoder as the only consumer of the response. Schemes other than `http`/`https` (`file:`, `smb:`, `rtsp:`…) are refused at parse time.
-- The **AI tool never accepts a URL** (`uri` must come from a search result in the same conversation turn or name a source key): web pages fetched through `web.fetch` must not be able to make Gladys play an attacker-chosen stream by prompt injection. Direct URLs remain available to users through scenes and the HTTP API.
+- The **AI tools never accept a URL**: a `uri` they receive must be a source URI of an existing source, never `http(s)` — the rule the server can enforce. Web pages fetched through `web.fetch` must not be able to make Gladys play an attacker-chosen stream by prompt injection. Direct URLs remain available to users through scenes and the HTTP API.
 
 ### G.2 Untrusted payloads
 
@@ -784,13 +809,13 @@ Existing devices gain the new feature **on the next scan**: `device.create` matc
 ### G.3 Sources that need credentials
 
 - Credentials live in the integration (config `secret`, `oauth2`, `account_link`), never in the core, never in a URI (`<id>` must not carry credentials).
-- Resolved stream URLs often embed tokens (Subsonic `t`/`s` salt, Plex `X-Plex-Token`). They travel core → player only: **no API returns a `PlayableItem`**, the play answer carries a count, a now playing record carries a source URI and the schema refuses an `http(s)` one (E.3), and the core does not log `items[].url` (it logs the URI and the item count). MQTT players do receive the URLs — publishing them on a broker is the MQTT user's trust boundary, documented in F.3.
-- **Per-user accounts** (two Spotify users in a household) are out of v1: a source is house-wide. The calendar type's per-user `account_schema` is the precedent if needed (open question 5).
+- Resolved stream URLs often embed tokens (Subsonic `t`/`s` salt, Plex `X-Plex-Token`). They travel core → player only: **no API returns a `PlayableItem`**, the play answer carries a count, a now playing record carries a source URI and the schema refuses an `http(s)` one (E.3), and the core does not log `items[].url` (it logs the URI and the item count). MQTT players do receive the URLs — publishing them on a broker is the MQTT user's trust boundary, documented in F.3 — and the MQTT publish path of the play request never logs its payload (today `publish()` logs every message at `debug`, C.3).
+- **Per-user accounts** (two Spotify users in a household) are out of v1: a source is house-wide. The calendar type's per-user `account_schema` is the precedent if needed (open question 4).
 
 ### G.4 Authorization and abuse
 
 - All routes require an authenticated user. Search is rate-limited per user (10/s) and fans out with per-source timeouts; images obey the per-service in-flight cap.
-- Any user who can use the dashboard can play music, as any user can press the existing play button today (open question 4 asks whether to restrict sources to admins).
+- Any user who can use the dashboard can play music, as any user can press the existing play button today (open question 3 asks whether to restrict sources to admins).
 
 ## H. Surfaces
 
@@ -808,18 +833,30 @@ Existing devices gain the new feature **on the next scan**: `device.create` matc
 - `display` — `"full"` (default, artwork + transport + volume + search) or `"compact"` (one line: thumbnail, title/artist, play/pause, next; a tap opens the full player in a modal).
 - `player_switch` (default `true`) — the header shows the current player as a dropdown; switching is local to the widget instance and to the session (not saved), so a wall tablet always comes back to its room's speaker.
 - `search` (default `true`, ignored when no source exists or the device is not a media player) — shows the "Play something…" button.
+- `EditMusicBox` lists **players** (a `playback_state` feature), where it listed devices with a `play` feature.
 
-**Data**: the widget loads the device (`GET /api/v1/device/:selector`, today) and its music object (`GET /api/v1/music/player/:selector`: now playing record, media player or not). **Rendering rules** — the UI derives from the features and the record, like the camera PTZ overlay:
+**Data**: the widget loads the device (`GET /api/v1/device/:selector`, today) and its music object (`GET /api/v1/music/player/:selector`: reachability, what it can play, now playing record). **Rendering rules** — the UI derives from the features and the record, like the camera PTZ overlay:
 
 | The player has… | The widget shows |
 |---|---|
 | a now playing record (E) | artwork (image key via B.5 and E.7, placeholder note icon otherwise), title, artist · album, source badge when `uri` is set, a progress bar extrapolated from `position`/`position_updated_at` while `playback_state` is `PLAYING` and `duration` is set, `LIVE` badge when there is no `duration` |
 | `play`/`pause`/`previous`/`next` | the transport buttons, each only if the feature exists (today's behavior) |
 | `volume` | the volume slider (today's behavior) |
-| `play-media`, or native playback from a source (C.2) | the "Play something…" button and the speaker picker; idle state "Nothing playing" with that button when the record is `null` or `playback_state` is `STOPPED` |
+| a media player (A.3) | the "Play something…" button and the speaker picker; idle state "Nothing playing" with that button when the record is `null` or `playback_state` is `STOPPED` |
 | only `play_notification` | not listed (unchanged from today) |
 
 Live updates: `device.new-state` (volume, playback state — today) **and** `music.now-playing-updated` for the record. Reconnection refresh: both loads again on `websocket.connected` (today's handler).
+
+**State of the player** — the record and `playback_state` read together (E.2, E.5):
+
+| Reachable | Record | `playback_state` | The widget shows |
+|---|---|---|---|
+| no | — (cleared) | any | the player greyed, "Unreachable", no controls — the persisted `playback_state` is not trusted |
+| yes | a record | `PLAYING` | the media, the position moving (E.2 formula) |
+| yes | a record | `PAUSED`, `STOPPED` | the media, the position frozen, play button |
+| yes | a record | `BUFFERING` | the media, a loading indicator, the position frozen |
+| yes | `null` | `PLAYING` | "Playing", without metadata — a player that reports none |
+| yes | `null` | `PAUSED`, `STOPPED` | "Nothing playing", with "Play something…" on a media player |
 
 **Mockups:**
 
@@ -845,13 +882,13 @@ A modal (desktop) / full-screen sheet (mobile) shared by the widget and the scen
 
 - query field (debounced 300 ms, ≥ 2 chars), type chips (All, Tracks, Albums, Artists, Playlists, Radios — only the types some source supports), source filter when there is more than one source;
 - results grouped by **source** (no cross-source ranking, B.2), each group with its own "more" button (`offset`), a source in `timeout`/`error` shows a one-line notice instead of hiding silently;
-- each row: artwork thumbnail (lazy-loaded), title, subtitle, duration for tracks, a play button, and a menu "Play next" / "Add to queue" (every media player honours them, C.3);
-- items not playable on the selected player are dimmed with the reason ("Spotify plays only on Spotify Connect devices") — the client computes it from the source descriptor (`streamable`, `native`) and the player's `play_media` / `native_sources` (C.4), the same rule as C.2;
+- each row: artwork thumbnail (lazy-loaded), title, subtitle, duration for tracks, a play button, and a menu "Play next" / "Add to queue" when the selected player declares `GLADYS_MUSIC_ENQUEUE`;
+- items not playable on the selected player are dimmed with the reason ("Spotify plays only on Spotify Connect devices"), as returned by the search API with `player` (C.4) — the rule of C.2 is computed by the core only;
 - footer: **Play on [player ▾]** (H.3).
 
 ### H.3 Speaker picker ("where")
 
-`GET /api/v1/music/player?uri=…` → players grouped by room, the current one first; each line shows the playback state and what it plays; incompatible ones are disabled with their reason. Selecting one sets the target of the search modal (and of the widget when `player_switch` is on).
+`GET /api/v1/music/player?uri=…` → players grouped by room (unreachable ones last, disabled), the current one first; each line shows the playback state and what it plays; incompatible ones are disabled with their reason. Selecting one sets the target of the search modal (and of the widget when `player_switch` is on).
 
 ### H.4 Scene action `music.play`
 
@@ -867,9 +904,9 @@ A modal (desktop) / full-screen sheet (mobile) shared by the widget and the scen
 ```
 
 - `device` — the selector of a media player (A.1; the `music.play-notification` convention); `uri` — picked with the search modal of H.2 (or typed: a direct URL is allowed here); `label` — a display snapshot of the title, stored so the scene stays readable when the source is offline, never used to play; `volume` / `evaluate_volume` — same validation as `music.play-notification`.
-- Executes `gladys.music.play`. A failure aborts the scene with the music error code (`MUSIC_PLAYER_INCOMPATIBLE`…), like other actions.
+- Executes `gladys.music.play`. A failure aborts the scene with the music error code (`MUSIC_PLAYER_INCOMPATIBLE`, `MUSIC_MEDIA_NOT_FOUND` for a stored URI that no longer resolves…), like other actions.
 - `music.play-notification` is unchanged.
-- The MCP `scene.create` schema gains the action (with `uri` restricted per G.1: from a prior search or a source URI).
+- The MCP `scene.create` schema gains the action (with `uri` restricted per G.1: a source URI, never `http(s)`).
 
 ### H.5 AI tools (MCP)
 
@@ -879,33 +916,33 @@ New tool category `AI_CHAT_TOOL_CATEGORIES.MUSIC` (the classifier learns "joue",
 |---|---|---|
 | `music.search` → `music_search` | `{ query, types?: MediaType[], source?: enum(source names) }` | the C.4 search, flattened to the top 10 items with `uri`, type, title, subtitle, source name — lets the model pick among homonyms or answer "which albums of X do I have?" |
 | `music.play` → `music_play` | `{ query?, type?: MediaType, uri?, device?: enum(player names), room?: enum(room names), enqueue?, volume? }` | if `uri` is absent, searches `query` (filtered by `type`) and takes the **first playable result compatible with the target** (the `HassMediaSearchAndPlay` model — one tool call for "joue l'album Heroes de Bowie dans le salon"); then `choosePlayer` (C.2) and `music.play`. Returns what was played and where, or the ambiguity (list of players / results) for the model to ask back |
-| `music.control` → `music_control` | `{ action: 'pause' \| 'resume' \| 'next' \| 'previous' \| 'volume', volume?, device?, room? }` | writes the existing transport features; without a target, acts on the players currently `PLAYING` |
+| `music.control` → `music_control` | `{ action: 'pause' \| 'resume' \| 'next' \| 'previous' \| 'volume', volume?, device?, room? }` | writes the existing transport features; without a target, acts on the **reachable** players currently `PLAYING` |
 
-Device and room matching reuse `findBySimilarity`; `requireDeviceTargeting` is **not** set on `music_play` (no target = `choosePlayer`). `uri` must be a URI returned by a search in the conversation or a source URI — never a raw URL (G.1).
+Device and room matching reuse `findBySimilarity`; `requireDeviceTargeting` is **not** set on `music_play` (no target = `choosePlayer`). `uri` must be a source URI, never `http(s)` (G.1).
 
-"Qu'est-ce qui joue dans la cuisine ?" needs no new tool: `device.get-state` learns to render a music device — its `playback_state` and its now playing record as "title — artist" (music features are not covered today, Precedents). It reads the record from `gladys.music.getNowPlaying`, not from a feature.
+"Qu'est-ce qui joue dans la cuisine ?" needs no new tool: `device.get-state` learns to render a player — its `playback_state` and its now playing record as "title — artist" (music features are not covered today, Precedents). It reads the record from `gladys.music.getNowPlaying`, not from a feature.
 
 ## I. Compliance with `device-feature-categories.md`
 
-- **Capability, not brand (rule 1):** `play-media` describes what any networked player does; Spotify, Sonos, Navidrome appear only as examples. The source model is service-level, outside the taxonomy.
-- **Standards (rule 3):** Matter drives the model where it has one. Media Playback: one command per transport action and one `CurrentState` (the existing features, kept; `STOPPED`/`BUFFERING` added from `NotPlaying`/`Buffering`), `Duration` and `SampledPosition { updatedAt, position }` (the record's `duration`, `position`, `position_updated_at`). Content Launcher: `UrlPlayback` is `play-media`, `ContentSearch` is native playback (C.2). Matter has no metadata attributes and no catalog model, so the record's fields and the source contract are Gladys' own, designed from Home Assistant and Music Assistant (multi-vendor, multi-protocol) rather than from one API.
-- **Reuse before creating (rule 4):** no new category; the `music` category gains one type.
-- **Atomic values (rule 5):** what plays is a record of ten fields, so it is not a feature (E.1); `play-media` holds no value at all (A.3). Every music feature keeps one atomic value.
-- **Full set + `supported_options` (rule 6):** no enumerable value is added, so no option set: `play-media` refuses `supported_options` (A.3), and capabilities come from presence and ownership (C.2). A future enumeration (`repeat`: off / one / all) follows rule 6.
-- **Naming (rule 7):** kebab-case new type; legacy underscored siblings kept (open question 2).
-- **Plumbing (rule 8):** inline comment on `PLAY_MEDIA`; i18n `deviceFeatureCategory.music.play-media` and `deviceFeatureValue` for the new playback states in every locale file; `DeviceFeatureCategoriesIcon` (`fe-play-circle`); not added to `SUPPORTED_FEATURE_TYPES_BY_CATEGORY` and excluded from the scene value pickers (A.3); MQTT defaults (no min/max); no history grouping (no history).
+- **Capability, not brand (rule 1):** the params and the record describe what any networked player does; Spotify, Sonos, Navidrome appear only as examples. The source model is service-level, outside the taxonomy.
+- **Standards (rule 3):** Matter drives the model where it has one. Media Playback: one command per transport action and one `CurrentState` (the existing features, kept; `STOPPED`/`BUFFERING` added from `NotPlaying`/`Buffering`), `Duration` and `SampledPosition { updatedAt, position }` (the record's `duration`, `position`, `position_updated_at`). Content Launcher: its `UrlPlayback` and `ContentSearch` feature bits, declared per endpoint, are the `GLADYS_MUSIC_URL_PLAYBACK` and `GLADYS_MUSIC_NATIVE_PLAYBACK` params, declared per device (A.3). Matter has no metadata attributes and no catalog model, so the record's fields and the source contract are Gladys' own, designed from Home Assistant and Music Assistant (multi-vendor, multi-protocol) rather than from one API.
+- **Reuse before creating (rule 4):** no new category and no new type; the `playback_state` enum gains two values.
+- **Atomic values (rule 5):** what plays is a record of ten fields, so it is not a feature (E.1); what a player can play is not a value, so it is not a feature either (A.3). Every music feature keeps one atomic value.
+- **Full set + `supported_options` (rule 6):** no enumerable value is added, so no option set. A future enumeration (`repeat`: off / one / all) follows rule 6.
+- **Naming (rule 7):** no new type; the params follow the `GLADYS_*` namespace's spelling.
+- **Plumbing (rule 8):** `deviceFeatureValue` translations for the new playback states in every locale file; the MQTT setup's Music player block (F.3); no history grouping (no history).
 
 ## J. Testing expectations
 
-Per repository policy (100 % patch coverage server-side): `server/test/lib/music/*` for the registry, search fan-out (ok/timeout/error per source, pagination passthrough), compatibility matrix (native / stream / direct URL / incompatible, with and without `play-media`, `native` true/false), `choosePlayer` ordering, normalizers (every refusal), image allowlist and cache (source keys from records with `uri`, player keys without); the now playing store: every schema rule and its message, ownership, `position_updated_at` stamping, no event on an equal record, clearing on device destroy / service stop / integration disconnect; the `device.setValue` guard and the `normalizeSupportedOptions` refusal on `play-media`; `music.play` scene action; external-integration manifest validation (`music_source`, `native`/`streamable`), proxy messages (`music.play` acknowledgement and timeout), `POST /music/now_playing` (`200`/`400`/`404`/`429`); MQTT routing of `…/music/now_playing` (record, `null`, empty, invalid → error topic) and publication on `…/music/play`; Sonos and Cast play and now playing mappings (notification filtered out); MCP tools with fake sources and `device.get-state` on a music device. SDK: handlers, `publishNowPlaying` (stamping, holding until `device-created`, replay after re-authentication, no replay of a refused record), typings, `gladys.fake.music*`. Front: eslint, `compare-translations`, build; a Cypress spec playing a radio from the widget on a fake player.
+Per repository policy (100 % patch coverage server-side): `server/test/lib/music/*` for the registry, search fan-out (ok/timeout/error per source, pagination passthrough, per-item compatibility with `player`), the compatibility matrix (native / stream / direct URL / incompatible / unreachable, every combination of params), `choosePlayer` ordering, normalizers (every refusal, `PlayableItem.uri` source check), image allowlist and cache (source keys from records with `uri`, player keys without); the now playing store: every schema rule and its message (ISO date with offset, `position` with and without `duration`, queue fields together), ownership, the clock rules (stamping, refusal from MQTT, `position` dropped from a retained delivery), re-anchoring on each `playback_state` transition whatever the arrival order, the 2 s no-op rule, clearing on every path of E.5; the reserved params validation (`device.create`, `device.setParam`, external publication); `music.play` scene action; external-integration manifest validation (`music_source`), proxy messages (`music.play` acknowledgement and timeout), `POST /music/now_playing` (`200`/`400`/`404`/`429`); MQTT routing of `…/music/now_playing` (record, `null`, empty, retained, invalid → error topic), re-subscription on device creation, publication on `…/music/play` (QoS 1, payload not logged); the Sonos, Cast and AirPlay upgrade at start (idempotent); Sonos and Cast play and now playing mappings (notification filtered out, relayed `uri` mapping); MCP tools with fake sources, `http(s)` refused, `device.get-state` on a player. SDK: handlers, `publishNowPlaying` (stamping, holding until `device-created`, last published record kept, dropped on `400`/`404`/`device-deleted`, serialized per device, replay after re-authentication that never blocks `connected`), typings, `gladys.fake.music*`. Front: eslint, `compare-translations`, build; a Cypress spec playing a radio from the widget on a fake player.
 
 ## K. Phases
 
 | Phase | Content | Deliverable |
 |---|---|---|
-| **1 — core & contract** | Constants; `server/lib/music` (sources, search, play, compatibility, now playing store); HTTP API; the typed transports — internal `service.music`, external `music.*` messages and `POST /music/now_playing` (+ SDK release with the replay), MQTT `…/music/play` and `…/music/now_playing`; `radio` internal source; Sonos `play-media` + now playing; Google Cast persistent connection, `play-media` + now playing | "Play FIP on the Sonos" works through the API and from an external source (a Navidrome integration can be built against the SDK), and the record of what plays is right after a restart |
-| **2 — surfaces** | Music widget (full/compact, search, picker); `music.play` scene action; AI tools and the `MUSIC` tool category, `device.get-state` on music devices; Cast resume after notification | The three entry points of the forum request: voice, scene, widget |
-| **3 — breadth** *(not committed)* | AirPlay `play-media`; browse (a tree: artist → albums → tracks, HA `browse_media` model) for sources that declare it; transport extras — `stop` as one more type (a Matter command), `seek`, `shuffle`, `mute` as features, a `repeat` enumeration with `supported_options`; a `music.track-changed` scene trigger on the record's fields; grouping / multi-room; radio-browser.info in the `radio` source; per-user source accounts; native sources inside player services (Sonos favorites) | — |
+| **1 — core & contract** | Constants and reserved params; `server/lib/music` (sources, search, play, compatibility, now playing store with its clock and lifecycle); HTTP API; the typed transports — internal `service.music`, external `music.*` messages and `POST /music/now_playing` (+ SDK release with the replay), MQTT `…/music/play` and `…/music/now_playing`; `radio` internal source; Sonos params, play and now playing, with the upgrade of existing devices; Google Cast persistent connection, transport features, play and now playing, with the upgrade | "Play FIP on the Sonos" works through the API and from an external source (a Navidrome integration can be built against the SDK), and the record of what plays is refilled after a restart (without `uri` for a relayed media, E.7) |
+| **2 — surfaces** | Music widget (full/compact, search, picker, states of H.1); `music.play` scene action; AI tools and the `MUSIC` tool category, `device.get-state` on players; Cast resume after notification | The three entry points of the forum request: voice, scene, widget |
+| **3 — breadth** *(not committed)* | AirPlay as a media player; browse (a tree: artist → albums → tracks, HA `browse_media` model) for sources that declare it; transport extras — `stop` as one more type (a Matter command), `seek`, `shuffle`, `mute` as features, a `repeat` enumeration with `supported_options`; a `music.track-changed` scene trigger on the record's fields; grouping / multi-room; radio-browser.info in the `radio` source; per-user source accounts; native sources inside player services (Sonos favorites) | — |
 
 ## Alternatives considered (rejected)
 
@@ -913,16 +950,18 @@ Per repository policy (100 % patch coverage server-side): `server/test/lib/music
 - **The play request in `setValue`** — as the feature value, or as revision 1 did, the URI as the value and the expansion in `options`. Rejected: a record riding in the generic device path needs a side channel on every transport of that path (an `options` field in `external-integration.device.set-value`, a JSON exception on the MQTT state topic) whose shape depends on the feature type — the structured payload `camera-ptz-control.md` rejected. "Play this" is a core command with typed transports (C.1, C.3).
 - **MQTT players limited to direct URLs** (to keep the state topic scalar without a music topic). Rejected: an MQTT player could then play nothing from a source; a dedicated topic carries the record without bending the state topics.
 - **The player resolves the URI itself** (calls the core or the source back). Rejected: every player integration would have to implement a source client, an MQTT bridge cannot call back, and the core already knows both ends.
-- **A core-managed queue feeding one URL at a time** (watching `playback_state` to send the next track). Rejected: gaps between tracks, fragile end-of-track detection, double logic with every native queue (Sonos, Cast, MPD, LinkPlay all have one).
-- **The core streams or transcodes** (Music Assistant's model: every source → core → every player). Rejected: CPU and bandwidth on a Raspberry Pi, and against the "the core never fetches integration URLs" doctrine. Players fetch from sources directly; a source that needs a relay (a cloud service with no direct stream) is a `streamable: false, native: true` source with its own players. Using Music Assistant itself is welcome — as an external integration that is both a source and a set of players (C.2).
+- **A core-managed queue feeding one URL at a time** (watching `playback_state` to send the next track). Rejected: gaps between tracks, fragile end-of-track detection, double logic with every native queue (Sonos, Cast, MPD, LinkPlay all have one). Where a speaker has no queue, chaining items is the protocol's business, in its integration (C.3).
+- **The core streams or transcodes** (Music Assistant's model: every source → core → every player). Rejected: CPU and bandwidth on a Raspberry Pi, and against the "the core never fetches integration URLs" doctrine. Players fetch from sources directly; a source that needs a relay (a cloud service with no direct stream) is a `streamable: false` source whose own players play natively. Using Music Assistant itself is welcome — as an external integration that is both a source and a set of players (C.2).
 - **Extending `play_notification`** (`announce` flag, Home Assistant style). Rejected in D: two semantics, two contracts, each one sentence long.
 - **"Now playing" as a JSON document in a text feature's `last_value_string`** (revision 1). Rejected after review, for the reasons of E.1: unenforceable on the fire-and-forget state path, a blob for every generic consumer, no versioning, a duplicate of `playback_state`, a precedent for every future record.
 - **"Now playing" persisted** (a table, or a copy in a feature next to the memory). Rejected: after a restart a stored value is almost always wrong, every transport already restores the truth (E.5), and a table means a migration for data nobody needs once stale.
 - **"Now playing" as one feature per field** (`track-title`, `artist`, `album`, `artwork`, `duration`, `position`). Rejected: six features per player, six writes per track change, inconsistent intermediate states (new title with old artwork), and no history value to justify them.
-- **Capability flags in `play-media`'s `supported_options`** (revision 1: `STREAM`, `ENQUEUE`). Rejected after review: options are values a user sends — the scene editor builds a value list from any feature's options and would offer "Stream" as a value to send. `ENQUEUE` is implied by the queue every album-playing player has (C.3); `STREAM` is the presence of `play-media` (C.2).
-- **"Accepts URLs" declared elsewhere** — a device param, or a per-integration manifest field. Rejected: a param is an untyped string; a per-integration flag is too coarse (a Home Assistant bridge exposes speakers that accept URLs next to Spotify entities that do not). The presence of a feature is per device and typed.
-- **Native playback by ownership alone, without the source's `native` flag.** Rejected: every music device of a catalog integration (the clients a Plex integration reports) would be listed as a target it may not be. The source says once whether its own devices play its media.
-- **Declaring the accepted URI schemes as string `supported_options`** (`spotify`, `http`…). Rejected: string option values are reserved to `text`/`select` dynamic lists, and ownership plus the source's `native` express the native case.
+- **A playback speed in the record** (Matter's `PlaybackSpeed`, so that the record extrapolates on its own). Rejected: a speed of 0 when paused repeats `playback_state`; the core re-anchors the record on each transition instead (E.2).
+- **Capability flags in a `play-media` feature's `supported_options`** (revision 1: `STREAM`, `ENQUEUE`). The maintainer found them acceptable provided the front never renders them as controls. Dropped anyway: the scene editor builds a value list from any feature's options (`deviceFeatureValueOptions.js`), so "never rendered" would need exclusions in every value picker, and the flags would still be stored as values.
+- **A `play-media` feature that holds no value**, its presence meaning "plays by URL" (this revision's first draft). Rejected: a valueless feature needs exclusions in `setValue`, `newStateEvent`, the eleven pickers built on `SelectDeviceFeature` and the MQTT catalog (which would make it a push button), and `min`/`max` are `NOT NULL`. A declaration is not a value; the reserved params carry it without touching the generic paths (A.3).
+- **Capabilities declared per integration** — a manifest field "accepts URLs", or a `native` flag in the source descriptor. Rejected: too coarse. A Home Assistant bridge exposes speakers that accept URLs next to Spotify entities that do not; a Plex integration reports clients it can drive next to clients it cannot. Matter declares both bits per endpoint; the params do it per device.
+- **Queueing mandatory for every media player** (this revision's first draft). Rejected: Spotify's Web API queues one track at a time, and many speakers have no queue; a declared `GLADYS_MUSIC_ENQUEUE` lets the UI offer only what works.
+- **Declaring the accepted URI schemes as string `supported_options`** (`spotify`, `http`…). Rejected: string option values are reserved to `text`/`select` dynamic lists, and the native and URL params express both routes.
 - **Artwork as URLs loaded by the browser.** Rejected: LAN-only and `http:` URLs break on Gladys Plus and in HTTPS pages, third-party CDNs learn the user's IP, authenticated covers (Subsonic) would leak tokens. Keys + bytes on demand, the widget doctrine.
 - **A `music` manifest type.** Rejected per `provider-type.md`: the dual-role integrations (Spotify, Plex, Lyrion, MPD) are devices *and* sources; a capability field fits every type.
 - **Browse in v1** (HA `browse_media` tree). Deferred to phase 3: search covers the three requested entry points (voice, scene, widget), and a tree navigator is a larger UI than this feature needs to be useful.
@@ -931,13 +970,12 @@ Per repository policy (100 % patch coverage server-side): `server/test/lib/music
 ## Open questions (for review)
 
 1. **Transport model.** Proposal: keep `play`/`pause`/`previous`/`next` as separate features and add `stop` the same way later, as Matter does (A.1). Or schedule a migration to a single `transport` feature with `supported_options` (and when)? This choice is as definitive as the record's.
-2. **Naming.** `play-media` (kebab-case, rule 7) next to `play_notification`/`playback_state`, or `play_media` for consistency within the category?
-3. **A feature without a value.** `play-media` declares URL playback per device, persisted with the device and visible in the MQTT setup — the role of a Matter feature bit — but it holds no value (A.3). Acceptable, or is there a better home in Gladys for a per-device capability?
-4. **Who may play?** Any authenticated user (as today's play button), or restrict search/play of some sources to admins?
-5. **Per-user source accounts** (Spotify per family member) — needed in v1? If yes, reuse the calendar `account_schema` model.
-6. **Default player.** When the AI gets no room and several compatible players exist: ask back (current proposal), or use the room of the user's last interaction / a per-user preferred player?
-7. **Built-in `radio` source.** Core service (proposal: zero dependency, reference implementation) or a store integration?
-8. **Grouping / multi-room** (Sonos groups, Cast groups): model as a phase-3 feature (`group-members` with dynamic options) or as player devices that integrations publish for each group?
-9. **Resume after notification**: SHOULD (proposal) or MUST for players that have both features?
-10. **Clearing on disconnect** (E.5): immediately, at the moment the integration turns `DEGRADED` (proposal), or after a grace period that would hide short reconnections?
-11. **MQTT refusals** (E.4): publish them on `…/music/now_playing/error` (proposal), or only log them?
+2. **Capabilities as reserved device params** (`GLADYS_MUSIC_URL_PLAYBACK`, `GLADYS_MUSIC_NATIVE_PLAYBACK`, `GLADYS_MUSIC_ENQUEUE`, A.3): the `GLADYS_TRANSPORT` mechanism used for a per-device capability. Acceptable, or is there a better home in Gladys for what a device can do without it being a value?
+3. **Who may play?** Any authenticated user (as today's play button), or restrict search/play of some sources to admins?
+4. **Per-user source accounts** (Spotify per family member) — needed in v1? If yes, reuse the calendar `account_schema` model.
+5. **Default player.** When the AI gets no room and several compatible players exist: ask back (current proposal), or use the room of the user's last interaction / a per-user preferred player?
+6. **Built-in `radio` source.** Core service (proposal: zero dependency, reference implementation) or a store integration?
+7. **Grouping / multi-room** (Sonos groups, Cast groups): model as a phase-3 feature (`group-members` with dynamic options) or as player devices that integrations publish for each group?
+8. **Resume after notification**: SHOULD (proposal) or MUST for players that have both features?
+9. **Clearing when a player becomes unreachable** (E.5): immediately (proposal), or after a grace period that would hide short reconnections?
+10. **MQTT strictness** (E.4): refusals published on `…/music/now_playing/error` and unknown keys refused, as everywhere (proposal), or unknown keys stripped with a warning for bridges, which have no `gladys_version` range?

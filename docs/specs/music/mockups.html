@@ -135,7 +135,7 @@
           <button class="btn btn-block btn-outline-primary"><i class="fe fe-search mr-2"></i>Play something…</button>
         </div>
       </div>
-      <div class="caption">display: "full" (default) — player with <code>now-playing</code> + <code>play-media</code></div>
+      <div class="caption">display: "full" (default) — a media player with a now playing record</div>
     </div>
 
     <!-- COMPACT players -->
@@ -189,8 +189,8 @@
           <div class="row mt-4"><div class="col"><input type="range" value="40" class="form-control" min="0" max="100"></div></div>
         </div>
       </div>
-      <div class="caption">Legacy player (no <code>now-playing</code>, no <code>play-media</code>): rendered exactly as today — this is also today's widget for every player</div>
-      <div class="note mt-4"><b>Rendering rule:</b> each area appears only if the matching feature exists — artwork/title ← <code>now-playing</code>; buttons ← <code>play</code>/<code>pause</code>/<code>previous</code>/<code>next</code>; slider ← <code>volume</code>; "Play something…" and the speaker dropdown ← <code>play-media</code>. Shuffle/repeat are greyed placeholders for phase 3 and are <i>hidden</i> when the player does not declare them.</div>
+      <div class="caption">Legacy player (no now playing record, not a media player): rendered exactly as today — this is also today's widget for every player</div>
+      <div class="note mt-4"><b>Rendering rule:</b> each area appears only if the matching data exists — artwork/title ← the now playing record (<code>music.now-playing-updated</code>); buttons ← <code>play</code>/<code>pause</code>/<code>previous</code>/<code>next</code>; slider ← <code>volume</code>; "Play something…" and the speaker dropdown ← a media player (<code>GLADYS_MUSIC_*</code> params). Shuffle/repeat are greyed placeholders for phase 3 and are <i>hidden</i> when the player does not declare them.</div>
     </div>
   </div>
 </div>
